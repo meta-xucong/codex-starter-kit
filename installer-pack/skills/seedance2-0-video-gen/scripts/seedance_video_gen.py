@@ -13,6 +13,8 @@ import time
 import uuid
 import os
 import calendar
+import ipaddress
+import socket
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +28,9 @@ else:
 # remain usable without them; real submission/query requires both values.
 API_KEY = os.environ.get("SEEDANCE_API_KEY", "").strip()
 API_KEY_LOAD_ERROR = None if API_KEY else "缺少 SEEDANCE_API_KEY 环境变量。"
-SEEDANCE_MODEL = os.environ.get("SEEDANCE_MODEL", "doubao-seedance-2-0-260128").strip()
+SEEDANCE_MODEL = os.environ.get("SEEDANCE_MODEL", "").strip()
+DEFAULT_AGENT_ID = os.environ.get("SEEDANCE_AGENT_ID", "").strip()
+SKILL_DIRECTORY = Path(__file__).resolve().parents[1]
 
 
 def parse_json_response(raw):
@@ -119,60 +123,155 @@ def request_json(url, method="GET", headers=None, payload=None, timeout=60):
         }
 
 
+def validate_media_url(value):
+    parsed = urllib.parse.urlparse(str(value or "").strip())
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise ValueError("媒体必须是无内嵌凭据和 fragment 的 HTTPS URL。")
+    hostname = parsed.hostname.casefold()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        raise ValueError("媒体 URL 不得指向本机。")
+    try:
+        address = ipaddress.ip_address(hostname.strip("[]"))
+    except ValueError:
+        address = None
+    if address and not address.is_global:
+        raise ValueError("媒体 URL 不得使用私有、环回、链路本地或保留 IP 地址。")
+    return parsed
+
+
+def validate_public_dns_target(parsed):
+    hostname = str(parsed.hostname or "").strip()
+    if not hostname:
+        raise ValueError("媒体 URL 缺少主机名。")
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+            if item and len(item) >= 5 and item[4]
+        }
+    except OSError as error:
+        raise ValueError(f"无法解析媒体主机: {hostname}") from error
+    if not addresses:
+        raise ValueError(f"媒体主机没有可用地址: {hostname}")
+    for raw_address in addresses:
+        address = ipaddress.ip_address(str(raw_address).split("%", 1)[0])
+        if not address.is_global:
+            raise ValueError("媒体主机解析到私有、环回、链路本地或保留地址，已拒绝下载。")
+    return addresses
+
+
+class ValidatingMediaRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        parsed = validate_media_url(new_url)
+        validate_public_dns_target(parsed)
+        return super().redirect_request(request, file_pointer, code, message, headers, new_url)
+
+
 def is_image_url(data):
-    """检查数据是否为有效的图片URL"""
-    if not data or not isinstance(data, str):
+    try:
+        validate_media_url(data)
+        return True
+    except (TypeError, ValueError):
         return False
-    # 检查是否是有效的HTTP/HTTPS URL
-    if data.startswith(("http://", "https://")):
-        # 简单验证URL格式
-        try:
-            parsed = urllib.parse.urlparse(data)
-            return all([parsed.scheme, parsed.netloc])
-        except Exception:
-            return False
-    return False
 
 
 def is_video_url(data):
-    """检查数据是否为有效的视频 URL。"""
-    if not data or not isinstance(data, str):
+    try:
+        validate_media_url(data)
+        return True
+    except (TypeError, ValueError):
         return False
-    if data.startswith(("http://", "https://")):
-        try:
-            parsed = urllib.parse.urlparse(data)
-            return all([parsed.scheme, parsed.netloc])
-        except Exception:
-            return False
-    return False
 
 
 def is_audio_url(data):
-    """检查数据是否为有效的音频URL"""
-    if not data or not isinstance(data, str):
+    try:
+        validate_media_url(data)
+        return True
+    except (TypeError, ValueError):
         return False
-    # 检查是否是有效的HTTP/HTTPS URL
-    if data.startswith(("http://", "https://")):
-        # 简单验证URL格式
-        try:
-            parsed = urllib.parse.urlparse(data)
-            return all([parsed.scheme, parsed.netloc])
-        except Exception:
-            return False
-    return False
+
+
+def validate_service_base_url(value):
+    parsed = urllib.parse.urlparse(str(value or "").strip())
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("SEEDANCE_API_BASE_URL 必须是带主机名的 HTTPS URL。")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("SEEDANCE_API_BASE_URL 不得包含凭据、查询参数或 fragment。")
+    if parsed.path not in {"", "/"}:
+        raise ValueError("SEEDANCE_API_BASE_URL 必须是服务根地址，不得包含 API 路径。")
+    return parsed
+
+
+def ensure_outside_installed_skill(path, label="数据路径"):
+    resolved = Path(path).expanduser().resolve()
+    try:
+        resolved.relative_to(SKILL_DIRECTORY)
+    except ValueError:
+        return resolved
+    raise ValueError(f"{label} 不得位于已安装 Skill 目录内: {resolved}")
+
+
+def resolve_seedance_data_dir():
+    explicit = str(os.environ.get("SEEDANCE_DATA_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    codex_data = str(os.environ.get("CODEX_DATA_DIR") or "").strip()
+    if codex_data:
+        return (Path(codex_data).expanduser() / "seedance2-0-video-gen").resolve()
+    return (Path.cwd() / "codex-data" / "seedance2-0-video-gen").resolve()
+
+
+def positive_int_environment(name):
+    raw = str(os.environ.get(name) or "").strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def adapter_policy_configuration_error():
+    missing = []
+    if not SEEDANCE_MODEL:
+        missing.append("SEEDANCE_MODEL")
+    if VIDEO_GENERATION_PRECHARGE_POINTS is None:
+        missing.append("SEEDANCE_PRECHARGE_POINTS")
+    if OFFICIAL_LINK_TTL_HOURS is None:
+        missing.append("SEEDANCE_OFFICIAL_LINK_TTL_HOURS")
+    if not REFUND_RULE:
+        missing.append("SEEDANCE_REFUND_RULE")
+    if missing:
+        return "缺少或无效的显式服务配置：" + ", ".join(missing) + "。Starter Kit 不猜测模型、费用或链接策略。"
+    try:
+        ensure_outside_installed_skill(TASK_RECORDS_PATH, "Seedance 任务记录路径")
+    except ValueError as error:
+        return str(error)
+    return ""
 
 
 DEFAULT_API_BASE_URL = os.environ.get("SEEDANCE_API_BASE_URL", "").strip().rstrip("/")
 BASE_URL = f"{DEFAULT_API_BASE_URL}/api/llm/doubao/contents/generations/tasks" if DEFAULT_API_BASE_URL else ""
-TASK_RECORDS_PATH = Path(__file__).resolve().parent / "seedance_video_tasks.json"
+_task_records_override = str(os.environ.get("SEEDANCE_TASK_RECORDS_PATH") or "").strip()
+TASK_RECORDS_PATH = (
+    Path(_task_records_override).expanduser().resolve()
+    if _task_records_override
+    else resolve_seedance_data_dir() / "seedance_video_tasks.json"
+)
 TASK_RECORDS_LOCK_PATH = TASK_RECORDS_PATH.with_suffix(TASK_RECORDS_PATH.suffix + ".lock")
-VIDEO_GENERATION_PRECHARGE_POINTS = 20000
+VIDEO_GENERATION_PRECHARGE_POINTS = positive_int_environment("SEEDANCE_PRECHARGE_POINTS")
 TASK_RECORDS_VERSION = 3
 CONFIRMATION_MANIFEST_VERSION = 3
 CONFIRMATION_TTL_SECONDS = 30 * 60
-OFFICIAL_LINK_TTL_HOURS = 24
+OFFICIAL_LINK_TTL_HOURS = positive_int_environment("SEEDANCE_OFFICIAL_LINK_TTL_HOURS")
 OFFICIAL_LINK_EXPIRED_MESSAGE = "官方链接已过期，请到本地产物或云端产物中查看"
-REFUND_RULE = "生成完成后返还剩余积分"
+REFUND_RULE = os.environ.get("SEEDANCE_REFUND_RULE", "").strip()
+MAX_VIDEO_BYTES = positive_int_environment("SEEDANCE_MAX_VIDEO_BYTES") or 512 * 1024 * 1024
 TERMINAL_TASK_FAILURE_STATUSES = {"failed", "cancelled", "unknown"}
 TERMINAL_TASK_STATUSES = TERMINAL_TASK_FAILURE_STATUSES | {"official_link_expired"}
 SUBMISSION_IN_PROGRESS_STATUSES = {"submitting", "submission_unknown"}
@@ -181,14 +280,6 @@ DIAGNOSTIC_PROMPTS = {
     "test", "testing", "demo", "hello", "ping", "123", "1",
     "测试", "测一下", "占位符", "<prompt>", "<提示词>",
 }
-MEDIA_URL_PATTERN = re.compile(r'https?://[^\s"\'<>]+', re.IGNORECASE)
-MEDIA_EXTENSIONS = {
-    "image": {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif"},
-    "video": {".mp4", ".mov", ".webm", ".m4v", ".avi", ".mkv"},
-    "audio": {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"},
-}
-
-
 def error_result(code, message, error_type="BadRequest", **extra):
     result = {
         "error": {
@@ -1400,34 +1491,25 @@ def build_video_request_payload(prompt, duration=None, image_paths=None, audio_p
         return error_result("InvalidParameter", f"不支持的画面比例: {ratio}。")
 
     processed_images = []
-    seen_images = set()
     for raw_image in image_paths or []:
         image_url = str(raw_image or "").strip()
         if not is_image_url(image_url):
             return error_result("InvalidImage", f"无效的图片 URL: {image_url[:100]}...")
-        if image_url not in seen_images:
-            seen_images.add(image_url)
-            processed_images.append(image_url)
+        processed_images.append(image_url)
 
     processed_videos = []
-    seen_videos = set()
     for raw_video in video_paths or []:
         video_url = str(raw_video or "").strip()
         if not is_video_url(video_url):
             return error_result("InvalidVideo", f"无效的视频 URL: {video_url[:100]}...")
-        if video_url not in seen_videos:
-            seen_videos.add(video_url)
-            processed_videos.append(video_url)
+        processed_videos.append(video_url)
 
     processed_audio = []
-    seen_audio = set()
     for raw_audio in audio_paths or []:
         audio_url = str(raw_audio or "").strip()
         if not is_audio_url(audio_url):
             return error_result("InvalidAudio", f"无效的音频 URL: {audio_url[:100]}...")
-        if audio_url not in seen_audio:
-            seen_audio.add(audio_url)
-            processed_audio.append(audio_url)
+        processed_audio.append(audio_url)
 
     content = [{"type": "text", "text": prompt}]
     for image_url in processed_images:
@@ -1454,6 +1536,13 @@ def build_video_request_payload(prompt, duration=None, image_paths=None, audio_p
             "GenerateAudioRequired",
             "必须生成有声音的视频：generate_audio 只能为 true，禁止 false，"
             "也禁止规划后期配音/BGM 替代模型出声。",
+        )
+
+    if not SEEDANCE_MODEL:
+        return error_result(
+            "ConfigError",
+            "缺少 SEEDANCE_MODEL；Starter Kit 不猜测视频模型名称。",
+            "Configuration",
         )
 
     payload = {
@@ -1492,7 +1581,7 @@ def submit_video_task(prompt, duration=None, image_paths=None, audio_paths=None,
     if not normalized_confirmation_id or len(fingerprint) != 64:
         return error_result(
             "ConfirmationRequired",
-            "正式生成必须使用已向用户展示并确认的确认清单和完整指纹；禁止直接提交 prompt。",
+            "正式生成必须使用与用户确认内容对应的清单和执行器内部完整指纹；禁止直接提交 prompt。",
             "PermissionDenied",
         )
     if not is_explicit_user_confirmation(user_confirmation):
@@ -1525,6 +1614,10 @@ def submit_video_task(prompt, duration=None, image_paths=None, audio_paths=None,
 
     if not DEFAULT_API_BASE_URL:
         return error_result("ConfigError", "缺少 SEEDANCE_API_BASE_URL 环境变量。", "Configuration")
+    try:
+        validate_service_base_url(DEFAULT_API_BASE_URL)
+    except ValueError as error:
+        return error_result("ConfigError", str(error), "Configuration")
     if not API_KEY:
         return api_key_error_result()
 
@@ -1695,25 +1788,37 @@ def sanitize_filename_stem(name=""):
     return result or "video"
 
 
+def normalize_agent_id(value):
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError("必须提供外部视频网关要求的 agent_id。")
+    if len(normalized) > 256 or any(ord(char) < 32 or ord(char) == 127 for char in normalized):
+        raise ValueError("agent_id 长度或字符无效。")
+    return normalized
+
+
 def resolve_video_output_dir(agent_id=None, output_dir=None):
-    """解析视频本地保存目录，优先级：显式参数 > 环境变量 > agent 工作区默认路径。
+    """解析视频本地保存目录，优先级：显式参数 > 环境变量 > 项目数据目录。
 
     始终返回绝对路径。
     """
     explicit = str(output_dir or os.environ.get("VIDEO_OUTPUT_DIR") or "").strip()
     if explicit:
-        return Path(explicit).expanduser().resolve()
+        return ensure_outside_installed_skill(explicit, "视频输出目录")
 
+    artifact_root = str(os.environ.get("CODEX_ARTIFACT_DIR") or "").strip()
+    base = (
+        Path(artifact_root).expanduser().resolve() / "seedance2-0-video-gen"
+        if artifact_root
+        else resolve_seedance_data_dir()
+    )
     normalized_agent_id = str(agent_id or "").strip()
-    if normalized_agent_id:
-        if normalized_agent_id.lower() == "main":
-            return (Path(os.environ.get("CODEX_ARTIFACT_DIR", Path.cwd() / "createContent")) / "video").resolve()
-        return (
-            Path(os.environ.get("CODEX_ARTIFACT_DIR", Path.cwd() / "createContent"))
-            / "agents" / sanitize_filename_stem(normalized_agent_id) / "video"
-        ).resolve()
-
-    return (Path.cwd() / "createContent" / "video").resolve()
+    if normalized_agent_id and normalized_agent_id.casefold() != "main":
+        return ensure_outside_installed_skill(
+            base / "agents" / sanitize_filename_stem(normalized_agent_id) / "video",
+            "视频输出目录",
+        )
+    return ensure_outside_installed_skill(base / "video", "视频输出目录")
 
 
 def calculate_confirmation_fingerprint(manifest):
@@ -1724,9 +1829,13 @@ def calculate_confirmation_fingerprint(manifest):
 def build_confirmation_manifest(agent_id, prompt, duration, image_paths=None,
                                 audio_paths=None, ratio="16:9", watermark=False,
                                 generate_audio=True, video_paths=None, output_dir=None):
-    normalized_agent_id = str(agent_id or "").strip()
-    if not normalized_agent_id:
-        return error_result("InvalidAgentId", "准备确认清单时必须提供 agent_id。")
+    try:
+        normalized_agent_id = normalize_agent_id(agent_id)
+    except ValueError as error:
+        return error_result("InvalidAgentId", str(error))
+    policy_error = adapter_policy_configuration_error()
+    if policy_error:
+        return error_result("ConfigError", policy_error, "Configuration")
 
     prepared = build_video_request_payload(
         prompt=prompt,
@@ -1777,7 +1886,10 @@ def build_confirmation_manifest(agent_id, prompt, duration, image_paths=None,
             "refund_rule": REFUND_RULE,
             "official_link_ttl_hours": OFFICIAL_LINK_TTL_HOURS,
             "artifact_locations": ["local", "cloud"],
-            "official_link_expiry_notice": "官方视频链接有效期为 24 小时，过期后到本地产物或云端产物中查看",
+            "official_link_expiry_notice": (
+                f"服务方声明的官方视频链接有效期为 {OFFICIAL_LINK_TTL_HOURS} 小时；"
+                "过期后到本地产物或云端产物中查看"
+            ),
             "new_confirmation_required_for_every_post": True,
         },
         "request": {
@@ -1801,12 +1913,19 @@ def write_confirmation_manifest(manifest, agent_id=None, output_dir=None,
                                 confirmation_output=None):
     if confirmation_output:
         target_path = Path(confirmation_output).expanduser().resolve()
+        if target_path.is_dir():
+            target_path = target_path / f"{manifest['confirmation_id']}.json"
     else:
         confirmation_dir = (
             resolve_video_output_dir(agent_id=agent_id, output_dir=output_dir)
             / ".confirmations"
         )
         target_path = confirmation_dir / f"{manifest['confirmation_id']}.json"
+
+    try:
+        target_path = ensure_outside_installed_skill(target_path, "确认清单路径")
+    except ValueError as error:
+        return error_result("InvalidOutputPath", str(error), "Configuration")
 
     if target_path.exists():
         return error_result(
@@ -1848,7 +1967,7 @@ def validate_confirmation_manifest(manifest, expected_fingerprint=None,
     if not expected:
         return error_result(
             "ConfirmationFingerprintRequired",
-            "必须通过 --confirm-fingerprint 传入用户确认时展示的完整指纹。",
+            "必须通过 --confirm-fingerprint 传入执行器在准备阶段保留的完整指纹。",
             "PermissionDenied",
         )
     if not hmac.compare_digest(expected, stored_fingerprint):
@@ -2080,18 +2199,34 @@ def persist_video_to_local(video_url, agent_id=None, output_dir=None, file_stem=
     target_dir = resolve_video_output_dir(agent_id=agent_id, output_dir=output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
+    parsed_video_url = validate_media_url(video_url)
+    validate_public_dns_target(parsed_video_url)
+
     request = urllib.request.Request(
         video_url,
         headers={"Accept": "*/*", "User-Agent": "codex-seedance-video-gen/1.0"},
         method="GET",
     )
-    with urllib.request.urlopen(request, timeout=300) as response:
+    opener = urllib.request.build_opener(ValidatingMediaRedirectHandler())
+    with opener.open(request, timeout=300) as response:
+        final_url = response.geturl()
+        final_parsed = validate_media_url(final_url)
+        validate_public_dns_target(final_parsed)
         content_type = response.headers.get("Content-Type", "")
         normalized_content_type = str(content_type or "").split(";", 1)[0].strip().lower()
         if normalized_content_type in {"text/html", "application/json", "text/plain"}:
             raise ValueError(f"下载接口返回了非视频内容: {content_type}")
+        declared_length = str(response.headers.get("Content-Length") or "").strip()
+        if declared_length:
+            try:
+                if int(declared_length) > MAX_VIDEO_BYTES:
+                    raise ValueError(f"视频超过本地下载上限（{MAX_VIDEO_BYTES} bytes）。")
+            except ValueError as error:
+                if "超过本地下载上限" in str(error):
+                    raise
+                raise ValueError("视频响应包含无效的 Content-Length。") from error
 
-        extension = guess_extension_from_url(video_url) or guess_extension_from_content_type(content_type) or ".mp4"
+        extension = guess_extension_from_url(final_url) or guess_extension_from_content_type(content_type) or ".mp4"
         stem = sanitize_filename_stem(file_stem or task_id or "seedance-video")
         task_suffix = sanitize_filename_stem(task_id) if task_id else "video"
         timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -2109,6 +2244,8 @@ def persist_video_to_local(video_url, agent_id=None, output_dir=None, file_stem=
                         break
                     if not first_chunk:
                         first_chunk = chunk[:16]
+                    if total_size + len(chunk) > MAX_VIDEO_BYTES:
+                        raise ValueError(f"视频超过本地下载上限（{MAX_VIDEO_BYTES} bytes）。")
                     file.write(chunk)
                     digest.update(chunk)
                     total_size += len(chunk)
@@ -2344,10 +2481,17 @@ def query_video_task(task_id, agent_id=None, output_dir=None):
 
     if not DEFAULT_API_BASE_URL:
         return error_result("ConfigError", "缺少 SEEDANCE_API_BASE_URL 环境变量。", "Configuration")
+    try:
+        validate_service_base_url(DEFAULT_API_BASE_URL)
+    except ValueError as error:
+        return error_result("ConfigError", str(error), "Configuration")
     if not API_KEY:
         return api_key_error_result()
 
-    query_url = f"{BASE_URL}/{task_id}"
+    normalized_task_id = str(task_id or "").strip()
+    if not normalized_task_id or len(normalized_task_id) > 512:
+        return error_result("InvalidTaskId", "task_id 为空或过长。")
+    query_url = f"{BASE_URL}/{urllib.parse.quote(normalized_task_id, safe='')}"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {API_KEY}"
@@ -2792,7 +2936,7 @@ def generate_video_task(prompt, duration=None, image_paths=None, audio_paths=Non
         return finalize_generation_result(
             error_result(
                 "ConfirmationRequired",
-                "每次视频生成都必须先完成用户确认，并使用对应的 confirmation_id 和完整指纹。",
+                "每次视频生成都必须先完成用户确认，并由执行器内部使用对应的 confirmation_id 和完整指纹。",
                 "PermissionDenied",
             ),
             confirmation_id=confirmation_id,
@@ -2926,214 +3070,6 @@ def generate_video_task(prompt, duration=None, image_paths=None, audio_paths=Non
     )
 
 
-def get_session_file_path(agent_id):
-    """会话自动提取不属于离线能力包，要求显式传入媒体 URL。"""
-    raise RuntimeError("不读取会话历史；请在准备阶段显式传入完整的媒体 URL。")
-
-
-MEDIA_CONTENT_TYPES = {
-    "image": {"image", "image_url", "input_image"},
-    "video": {"video", "video_url", "input_video"},
-    "audio": {"audio", "audio_url", "input_audio"},
-}
-MEDIA_CONTENT_KEYS = {
-    "image": ("url", "image", "image_url"),
-    "video": ("url", "video", "video_url"),
-    "audio": ("url", "audio", "audio_url"),
-}
-
-
-def is_valid_media_url(url, media_type):
-    validators = {
-        "image": is_image_url,
-        "video": is_video_url,
-        "audio": is_audio_url,
-    }
-    validator = validators.get(media_type)
-    return bool(validator and validator(url))
-
-
-def looks_like_media_reference_url(url, media_type):
-    """仅按扩展名识别文本中的裸链接；无法判型时宁可停止也不猜。"""
-    if not is_valid_media_url(url, media_type):
-        return False
-    parsed = urllib.parse.urlparse(url)
-    suffix = Path(urllib.parse.unquote(parsed.path)).suffix.lower()
-    return suffix in MEDIA_EXTENSIONS[media_type]
-
-
-def extract_media_urls_from_text(text, media_type):
-    media_urls = []
-    for match in MEDIA_URL_PATTERN.findall(str(text or "")):
-        url = match.rstrip(".,;:!?)]}，。；：！？")
-        if looks_like_media_reference_url(url, media_type) and url not in media_urls:
-            media_urls.append(url)
-    return media_urls
-
-
-def extract_media_urls_from_content(content, media_type):
-    """兼容用户显式提供的 string/list/dict 形式的图片、视频和音频内容。
-
-    顺序规则：严格保留消息 content 中的出现顺序（用户上传/提供顺序）。
-    若同时存在显式媒体项与正文中的裸 URL，只采用显式媒体项顺序，
-    避免正文按文件名罗列时把上传顺序打乱。
-    """
-    if media_type not in MEDIA_CONTENT_TYPES:
-        raise ValueError(f"不支持的媒体类型: {media_type}")
-
-    explicit_urls = []
-    text_urls = []
-
-    def add(target, url, explicit_media=False):
-        normalized = str(url or "").strip()
-        valid = (
-            is_valid_media_url(normalized, media_type)
-            if explicit_media
-            else looks_like_media_reference_url(normalized, media_type)
-        )
-        if valid and normalized not in target:
-            target.append(normalized)
-
-    def visit(value, explicit_media=False):
-        if isinstance(value, str):
-            if explicit_media:
-                add(explicit_urls, value, explicit_media=True)
-            else:
-                for url in extract_media_urls_from_text(value, media_type):
-                    add(text_urls, url)
-            return
-        if isinstance(value, list):
-            for item in value:
-                visit(item)
-            return
-        if not isinstance(value, dict):
-            return
-
-        item_type = str(value.get("type") or "").lower()
-        if item_type in MEDIA_CONTENT_TYPES[media_type]:
-            for key in MEDIA_CONTENT_KEYS[media_type]:
-                candidate = value.get(key)
-                if isinstance(candidate, dict):
-                    candidate = candidate.get("url")
-                visit(candidate, explicit_media=True)
-            source = value.get("source")
-            if isinstance(source, dict):
-                visit(source.get("url"), explicit_media=True)
-
-        # 无 type 但具有明确的 image_url/video_url/audio_url 键时仍可安全判型。
-        typed_key = f"{media_type}_url"
-        if not item_type and typed_key in value:
-            candidate = value.get(typed_key)
-            if isinstance(candidate, dict):
-                candidate = candidate.get("url")
-            visit(candidate, explicit_media=True)
-
-        if item_type in {"text", "input_text"}:
-            visit(value.get("text"))
-        elif "text" in value and isinstance(value.get("text"), str):
-            visit(value.get("text"))
-
-    visit(content)
-    return explicit_urls if explicit_urls else text_urls
-
-
-def extract_media_from_session(session_file_path, media_type):
-    """从后向前查找最近一条真正包含指定媒体的用户消息。
-
-    返回该消息内的媒体 URL 列表，顺序与消息中出现/上传顺序一致，不做文件名排序。
-    """
-    try:
-        with open(session_file_path, "r", encoding="utf-8") as file:
-            lines = file.readlines()
-    except Exception as error:
-        raise RuntimeError(f"读取会话文件失败: {str(error)}")
-
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        msg_data = message.get("message", {})
-        if not isinstance(msg_data, dict) or msg_data.get("role") != "user":
-            continue
-        media_urls = extract_media_urls_from_content(msg_data.get("content"), media_type)
-        if media_urls:
-            return media_urls
-
-    return []
-
-
-def extract_image_urls_from_text(text):
-    return extract_media_urls_from_text(text, "image")
-
-
-def extract_image_urls_from_content(content):
-    return extract_media_urls_from_content(content, "image")
-
-
-def extract_images_from_session(session_file_path):
-    return extract_media_from_session(session_file_path, "image")
-
-
-def extract_videos_from_session(session_file_path):
-    return extract_media_from_session(session_file_path, "video")
-
-
-def extract_audios_from_session(session_file_path):
-    return extract_media_from_session(session_file_path, "audio")
-
-
-def dedupe_media_urls(media_urls):
-    deduped = []
-    seen = set()
-    for media_url in media_urls or []:
-        normalized = str(media_url or "").strip()
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        deduped.append(normalized)
-    return deduped
-
-
-def normalize_media_url_for_compare(url):
-    """比较用：展开 path 百分号编码，避免同一资源因编码差异被误判。"""
-    text = str(url or "").strip()
-    if not text:
-        return text
-    parsed = urllib.parse.urlparse(text)
-    return urllib.parse.urlunparse(
-        (
-            parsed.scheme.lower(),
-            parsed.netloc.lower(),
-            urllib.parse.unquote(parsed.path),
-            parsed.params,
-            parsed.query,
-            "",
-        )
-    )
-
-
-def media_url_lists_match(left, right):
-    left_norm = [normalize_media_url_for_compare(url) for url in left or []]
-    right_norm = [normalize_media_url_for_compare(url) for url in right or []]
-    return left_norm == right_norm
-
-
-def dedupe_images(images):
-    return dedupe_media_urls(images)
-
-
-def dedupe_videos(videos):
-    return dedupe_media_urls(videos)
-
-
-def dedupe_audios(audios):
-    return dedupe_media_urls(audios)
-
-
 def print_json_result(result):
     print(json.dumps(result, ensure_ascii=False))
     return 1 if isinstance(result, dict) and result.get("error") else 0
@@ -3171,7 +3107,7 @@ def collect_media_for_confirmation(args, media_type):
             f"--expected-{media_type}-count 不能为负数。",
         )
 
-    cli_urls = dedupe_media_urls(getattr(args, plural, None) or [])
+    cli_urls = [str(item or "").strip() for item in (getattr(args, plural, None) or [])]
     media_urls = cli_urls
     media_source = "explicit_cli" if media_urls else f"confirmed_no_{plural}"
 
@@ -3210,7 +3146,12 @@ def collect_audios_for_confirmation(args):
 def main():
     parser = argparse.ArgumentParser(description="Seedance 2.0 Video Generation")
     parser.add_argument("prompt", type=str, nargs="?", help="仅用于准备确认清单或查询历史")
-    parser.add_argument("--agent-id", type=str, required=True, help="Agent ID")
+    parser.add_argument(
+        "--agent-id",
+        type=str,
+        default=DEFAULT_AGENT_ID,
+        help="外部视频网关要求的路由 ID；也可通过 SEEDANCE_AGENT_ID 配置",
+    )
     parser.add_argument("--output-dir", type=str, help="本地视频保存目录")
     parser.add_argument("--duration", type=int, help="视频时长（秒），支持 4-15")
     parser.add_argument("--ratio", type=str, default=None, choices=["16:9", "9:16"], help="准备阶段默认 16:9")
@@ -3259,7 +3200,7 @@ def main():
     mode_group.add_argument("--reconcile-artifacts", action="store_true", help="只对账本地视频和任务 JSON，不请求 API")
 
     parser.add_argument("--confirmation-output", type=str, help="准备阶段的确认清单输出路径")
-    parser.add_argument("--confirm-fingerprint", type=str, help="用户确认时展示的完整 SHA-256 指纹")
+    parser.add_argument("--confirm-fingerprint", type=str, help="准备阶段返回、仅供执行器内部校验的完整 SHA-256 指纹")
     parser.add_argument("--dry-run", action="store_true", help="校验确认清单并输出实际 payload，不请求 API")
 
     parser.add_argument("--task-id", type=str, help="直接按 task_id 查询任务")
@@ -3277,6 +3218,18 @@ def main():
     parser.add_argument("--list-matches", type=int, default=10)
 
     args = parser.parse_args()
+
+    try:
+        args.agent_id = normalize_agent_id(args.agent_id)
+    except ValueError as error:
+        return print_json_result(error_result(
+            "AgentIdRequired",
+            f"{error} 必须通过 --agent-id 或 SEEDANCE_AGENT_ID 配置；不要把 Codex 任务 ID 猜作该值。",
+            "Configuration",
+        ))
+    policy_error = adapter_policy_configuration_error()
+    if policy_error:
+        return print_json_result(error_result("ConfigError", policy_error, "Configuration"))
 
     if args.poll_interval < 1 or args.max_wait < 1:
         return print_json_result(error_result(
@@ -3401,11 +3354,13 @@ def main():
             "official_link_ttl_hours": manifest["confirmation_policy"]["official_link_ttl_hours"],
             "artifact_locations": manifest["confirmation_policy"]["artifact_locations"],
             "message": (
-                "请将上述 prompt、图片/视频/音频列表、参数和完整指纹逐字展示给用户；"
+                "请将上述 prompt、图片/视频/音频列表、参数和服务方费用策略逐项展示给用户；"
+                "确认指纹仅供执行器内部校验，不向用户展示。"
                 "用户确认前禁止生成。确认表必须原样照抄本结果中的完整 URL，"
                 "禁止拆分或重组 attachment id 与文件名。"
                 "音频生成必须展示为「是」/true，禁止写「否」或后期配音/BGM。"
-                f"每个视频会先预扣 {VIDEO_GENERATION_PRECHARGE_POINTS} 积分，生成完成后返还剩余积分；"
+                f"服务方声明每个视频会先预扣 {VIDEO_GENERATION_PRECHARGE_POINTS} 积分；"
+                f"返还规则：{REFUND_RULE}；"
                 f"官方视频链接有效期为 {OFFICIAL_LINK_TTL_HOURS} 小时，链接过期后请到本地产物或云端产物中查看。"
             ),
         }
@@ -3493,10 +3448,10 @@ def main():
         if not args.confirm_charge or not is_explicit_user_confirmation(args.user_confirmation):
             return print_json_result(error_result(
                 "ConfirmationRequired",
-                f"生成 Seedance 视频前必须先告知用户：每个视频会先预扣 {VIDEO_GENERATION_PRECHARGE_POINTS} 积分，"
-                f"生成完成后返还剩余积分；官方视频链接有效期为 {OFFICIAL_LINK_TTL_HOURS} 小时，"
+                f"生成 Seedance 视频前必须先告知用户服务方配置：每个视频会先预扣 {VIDEO_GENERATION_PRECHARGE_POINTS} 积分；"
+                f"返还规则：{REFUND_RULE}；官方视频链接有效期为 {OFFICIAL_LINK_TTL_HOURS} 小时，"
                 "链接过期后请到本地产物或云端产物中查看；"
-                "并让用户明确回复“确认”或“就按这份生成”，确认该清单的完整 prompt、参考媒体列表、参数、费用说明和指纹。",
+                "并让用户明确回复“确认”或“就按这份生成”，确认该清单的完整 prompt、参考媒体列表、参数和费用说明。",
                 "PermissionDenied",
             ))
 

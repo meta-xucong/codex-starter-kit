@@ -19,13 +19,17 @@
 
 | Agent | 必需 Skill | 可选 Skill | 外部/运行时依赖 | 缺依赖时的行为 |
 |---|---|---|---|---|
-| 全能官 | `multi-search-engine`、`image-prompt-generator`、`video-prompt-generator` | `web-search-extraction`、`data-assistant`、`docx-butler`、`excel-xlsx`、`word-docx`、`pdf-processing-toolkit`、`powerpoint-pptx` | Python wheelhouse；可选网页搜索 | 先交付文字、研究框架和提示词，文件任务说明缺口 |
+| 全能官 | `multi-search-engine`、`image-prompt-generator`、`video-prompt-generator` | `web-search-extraction`、`data-assistant`、`docx-butler`、`excel-xlsx`、`word-docx`、`powerpoint-pptx` | Python wheelhouse；可选网页搜索 | 先交付文字、研究框架和提示词，文件任务说明缺口 |
 | 研究官 | `academic-research`、`competitor-intelligence`、`industry-analysis`、`user-research`、`market-sizing-analysis`、`multi-search-engine` | `web-search-extraction` | 可选网页搜索连接 | 只基于用户材料，标注无法实时核验 |
 | 创作官 | `xiaohongshu-writing`、`image-prompt-generator`、`video-prompt-generator` | `wechat-article-creator`、`web-search-extraction`、`image-2`、`seedance2-0-video-gen` | Python wheelhouse；图像/视频/搜索连接 | 输出成稿、提示词和分镜，不伪造图片/视频已生成 |
 | 投资官 | `china-stock-analysis`、`fund-portfolio`、`macro-research`、`venture-analysis`、`wealth-allocation` | `web-search-extraction` | Python wheelhouse；可选网页搜索连接 | 没有数据时只给方法、假设和风险，不编造行情 |
 | 增长官 | `painpoint-analyzer`、`offer-designer`、`traffic-hunter`、`conversion-optimizer`、`growth-analyst` | `web-search-extraction` | 可选网页搜索连接 | 基于用户业务数据和显式假设设计实验 |
 | 生活官 | `daily-reflection`、`weather-forecast`、`weather` | `fitness-coach`、`meal-planner`、`travel-planner`、`multi-search-engine`、`web-search-extraction` | Python wheelhouse；可选搜索连接 | 保留计划、清单和复盘文本；不伪造实时天气/价格 |
-| 办公官 | `efficiency-toolkit`、`email-expert`、`meeting-secretary` | `data-assistant`、`docx-butler`、`excel-xlsx`、`word-docx`、`powerpoint-pptx`、`pdf-processing-toolkit` | Python wheelhouse | 输出结构化文本和操作步骤，不声称文件已生成 |
+| 办公官 | `efficiency-toolkit`、`email-expert`、`meeting-secretary` | `data-assistant`、`docx-butler`、`excel-xlsx`、`word-docx`、`powerpoint-pptx` | Python wheelhouse | 输出结构化文本和操作步骤，不声称文件已生成 |
+
+所有表中的 `web-search-extraction` 都只是用户明确选择的外部适配器；检索默认优先使用当前 Codex 原生网页能力。
+`pdf-processing-toolkit` 属于 Agent 的 `blockedSkills`，只用于提醒许可证隔离，不是可选执行能力；PDF 任务优先走
+当前 Codex 已提供的 PDF 能力。
 
 ## 直接调用
 

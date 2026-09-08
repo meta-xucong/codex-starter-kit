@@ -428,7 +428,7 @@ def format_workout_for_display(workout: Dict) -> str:
         lines.append(f"{i}. {ex['name']}")
         lines.append(f"   {ex['sets']}组 × {ex['reps']}次")
         lines.append(f"   休息: {ex['rest_seconds']}秒")
-        lines.append(f"   💡 {ex['tips']}")
+        lines.append(f"   提示：{ex['tips']}")
         lines.append("")
     
     lines.append(f"预计时间: {workout.get('estimated_duration', 60)}分钟")
@@ -483,7 +483,7 @@ if __name__ == "__main__":
     if args.output:
         with open(args.output, 'w') as f:
             json.dump(program, f, indent=2)
-        print(f"✓ Program generated: {args.output}")
+        print(f"Program generated: {args.output}")
         print(f"  Program ID: {program_id}")
     else:
         print(json.dumps(program, indent=2))

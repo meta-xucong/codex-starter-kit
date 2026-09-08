@@ -1,300 +1,92 @@
 ---
 name: wealth-allocation
-description: 资产配置与组合管理工具，提供标准普尔家庭资产配置模型、再平衡策略、收益追踪功能。帮助用户构建科学的财富管理体系，实现风险可控下的财富增值。
-version: 1.0.0
+description: 使用用户审阅策略模板换算资产金额，并计算目标权重差额和带来源的组合历史表现。
 ---
 
-# 组合管理技能
+# 财富配置场景
 
-资产配置、再平衡策略、收益追踪工具。基于标准普尔家庭资产配置模型，帮助用户构建科学的财富管理体系。
+## 脚本路径
 
-## When to Use
+先把 `<skill-directory>` 解析为本 `SKILL.md` 所在目录。执行 `scripts/...` 时使用绝对路径，
+不要假设当前工作目录是仓库根目录。结果写入当前项目或用户指定目录，不写入 Skill 安装目录。
 
-当用户请求以下操作时调用此skill：
-- 进行资产配置规划
-- 制定再平衡策略
-- 追踪投资组合收益
-- 评估投资风险
-- 优化现有组合
-- 制定财富规划方案
+## 数据与决策边界
 
----
+当前估值、产品规则、基准收益和无风险利率具有时效性。需要这些数据时，优先用当前 Codex 的网页搜索/浏览能力
+打开用户认可的一手资料，记录时点和链接。网页能力不可用时，只能基于用户提供的输入做情景计算。
 
-## 🔍 数据获取规范
+三个脚本都不执行交易：
 
-### 必须使用 `web-search-extraction` 技能的场景
+- `asset_allocator.py` 只读取用户审阅的“三桶”策略模板并换算金额。
+- `rebalance_planner.py` 只计算当前权重到目标权重的差额和显式卖出成本场景。
+- `portfolio_tracker.py` 只计算无期间申赎假设下的收益、波动、回撤和显式基准差。
 
-以下情况**必须**先使用 `web-search-extraction` 技能获取最新市场数据：
+脚本不推断风险偏好、不内置标准配置、基准收益、交易阈值、止盈或止损线。
 
-| 数据类型 | 示例 | 处理方式 |
-|---------|------|---------|
-| 市场估值 | "当前股市估值水平" | `web-search-extraction` 获取 |
-| 利率环境 | "最新国债收益率" | `web-search-extraction` 获取 |
-| 资产配置参考 | "当前各类资产表现" | `web-search-extraction` 获取 |
-| 再平衡时机 | "现在适合调仓吗" | `web-search-extraction` 获取市场数据 |
+## Workflow 1：策略金额换算
 
-### 使用示例
+策略模板 JSON 必须包含 `risk_level`、`description`、`as_of`、非空 `sources`、`allocation`、
+`scenario_annual_return`、`scenario_max_drawdown`、`emergency_months` 和 `rebalance_threshold`。
+`allocation` 必须且只能包含 `survival/growth/aggressive`，合计 100。
 
-```
-用户：现在适合加仓股票吗？
-
-步骤1：使用 web-search-extraction 技能获取市场数据
-Skill: web-search-extraction
-Args: "沪深300 估值水平 PE PB 2024 2025"
-
-步骤2：用脚本进行资产配置分析
-python scripts/asset_allocator.py --amount 1000000 ...
+```text
+<python> "<skill-directory>/scripts/asset_allocator.py" \
+  --template "<reviewed-policy.json>" \
+  --amount 1000000 \
+  --period-years 5 \
+  --monthly-expense 20000 \
+  --output "<project-data>/allocation.json"
 ```
 
-### 注意
+输出只包含三桶金额、应急金目标/缺口、策略时点/来源和方法边界；不推荐具体产品。
 
-- 资产配置需要基于当前市场环境
-- **脚本提供配置框架，具体比例要结合实时市场数据**
-- 涉及具体产品选择时，要获取最新产品信息
+## Workflow 2：目标权重差额
 
-## Prerequisites
+当前与目标配置均为“资产代码到百分比”的 JSON 对象，各自合计必须为 100。组合价值、纳入计算的最小偏离百分点和
+卖出交易成本率全部显式传入。
 
-### Python环境要求
-```bash
-pip install pandas numpy matplotlib
+```text
+<python> "<skill-directory>/scripts/rebalance_planner.py" \
+  --current "<current.json>" \
+  --target "<reviewed-target.json>" \
+  --value 100000 \
+  --threshold 5 \
+  --transaction-cost-rate 0.1 \
+  --output "<project-data>/target-differences.json"
 ```
 
-## Core Modules
+输出中的 `increase/decrease` 只是达到用户目标所需的数学方向。脚本不下单，也不处理税、买入费用、滑点、最小交易单位、
+账户限制或目标策略是否适合用户。
 
-### 1. Asset Allocator (资产配置器)
-基于标准普尔模型的资产配置方案
+## Workflow 3：历史表现计算
 
-### 2. Rebalance Planner (再平衡规划器)
-定期或阈值再平衡策略
+`history` 必须是按月排列的 JSON 数组，每项含正数 `value`；点数恰好为 `months + 1`，首末值与
+`--initial/--current` 一致。同期无风险利率、数据时点和来源必填。只有提供已核验的“基准名称到同期年化收益率”
+JSON 对象时才生成差值比较。
 
-### 3. Portfolio Tracker (组合追踪器)
-多账户收益追踪与归因分析
-
-### 4. Risk Monitor (风险监控器)
-组合风险指标监控与预警
-
----
-
-## 标准普尔家庭资产配置模型
-
-### 四层资产结构
-
-```
-┌─────────────────────────────────────────────────┐
-│  进攻资产 10-20%  │  创造超额收益              │
-│  （股票、基金、创业投资）                        │
-├─────────────────────────────────────────────────┤
-│  增值资产 30-50%  │  稳健增值                  │
-│  （指数基金、债券、优质股票）                    │
-├─────────────────────────────────────────────────┤
-│  生存资产 40-60%  │  保障生活                  │
-│  （现金、货币基金、短债、保险）                  │
-└─────────────────────────────────────────────────┘
+```text
+<python> "<skill-directory>/scripts/portfolio_tracker.py" \
+  --initial 100000 \
+  --current 108000 \
+  --history "<monthly-history.json>" \
+  --months 12 \
+  --risk-free-rate 2 \
+  --benchmarks "<verified-benchmarks.json>" \
+  --as-of "<数据时点>" \
+  --source "<来源名称与 URL>" \
+  --output "<project-data>/tracking.json"
 ```
 
-### 各层资产说明
+模型假设没有期间申赎；波动率是月收益总体标准差年化。输出不做收益归因，不生成综合评分、调仓、止盈或止损建议。
 
-**生存资产（要花的钱）**
-- 占比：40-60%
-- 目标：3-6个月生活费 + 应急资金
-- 工具：货币基金、短债基金、银行存款
-- 特点：高流动性、保本
+## 输出要求
 
-**增值资产（生钱的钱）**
-- 占比：30-50%
-- 目标：跑赢通胀、稳健增值
-- 工具：指数基金、债券基金、优质蓝筹股
-- 特点：中等风险、长期持有
-
-**进攻资产（赚钱的钱）**
-- 占比：10-20%
-- 目标：追求超额收益
-- 工具：成长型股票、行业主题基金、创业投资
-- 特点：高风险高回报
-
----
-
-## Workflow 1: Asset Allocation (资产配置)
-
-### 基础五问
-
-在进行资产配置前，必须了解：
-
-1. **投资期限**：这笔钱多久不用？
-   - 短期（<1年）：生存资产为主
-   - 中期（1-3年）：平衡配置
-   - 长期（>3年）：可增加进攻资产
-
-2. **最大回撤容忍**：最多能接受多少亏损？
-   - <5%：保守型
-   - 5-15%：稳健型
-   - 15-30%：平衡型
-   - >30%：积极型
-
-3. **资金规模**：总投资金额？
-   - 影响分散度和流动性安排
-
-4. **现金流需求**：是否有定期支出？
-   - 影响生存资产比例
-
-5. **投资经验**：是否有相关经验？
-   - 新手：降低复杂度
-   - 老手：可适当增加主动管理
-
-### 生成配置方案
-
-```bash
-python scripts/asset_allocator.py \
-    --amount 1000000 \
-    --period "5年" \
-    --max-drawdown 15 \
-    --monthly-expense 20000 \
-    --experience "中等"
-```
-
-**输出示例：**
-```
-资产配置方案
-==============
-
-风险等级：稳健型
-总资金：100万元
-
-【生存资产】50万（50%）
-├── 货币基金：20万（应急+日常）
-├── 短债基金：20万（1年内可能用到的钱）
-└── 定期存款：10万（绝对安全垫）
-
-【增值资产】40万（40%）
-├── 沪深300指数基金：15万
-├── 债券基金：15万
-└── 优质蓝筹股：10万
-
-【进攻资产】10万（10%）
-├── 成长型股票基金：5万
-└── 行业主题ETF：5万
-
-预期年化收益：6-8%
-预期最大回撤：12-15%
-建议再平衡频率：每季度一次
-```
-
----
-
-## Workflow 2: Rebalance Strategy (再平衡策略)
-
-### 再平衡方式
-
-**时间再平衡**
-- 固定周期（每季度/每半年）检查并调整
-- 适合：纪律性强、没时间盯盘的投资者
-
-**阈值再平衡**
-- 当某类资产偏离目标比例超过阈值（如5%）时调整
-- 适合：对市场敏感、愿意主动管理的投资者
-
-**混合再平衡**
-- 每季度检查，仅当偏离超过阈值时才调整
-- 适合：大多数投资者
-
-### 执行再平衡
-
-```bash
-python scripts/rebalance_planner.py \
-    --portfolio portfolio.json \
-    --method "阈值再平衡" \
-    --threshold 5 \
-    --output rebalance_plan.json
-```
-
----
-
-## Workflow 3: Portfolio Tracking (组合追踪)
-
-### 追踪维度
-
-**收益追踪**
-- 总收益率
-- 年化收益率
-- 超额收益（相对基准）
-
-**风险追踪**
-- 波动率
-- 最大回撤
-- 夏普比率
-
-**归因分析**
-- 资产配置贡献
-- 个券选择贡献
-- 择时贡献
-
-### 生成追踪报告
-
-```bash
-python scripts/portfolio_tracker.py \
-    --portfolio portfolio.json \
-    --benchmark "沪深300" \
-    --period "2024-01-01至2024-12-31" \
-    --output tracking_report.json
-```
-
----
-
-## 标准输出格式
-
-### 🧭 投资官视角
-
-#### 一、核心结论
-（一句话说清配置方案核心）
-
-#### 二、背后逻辑
-- 为什么这样配置
-- 数据支撑
-- 模型依据
-
-#### 三、风险在哪里
-- 最大可能亏损
-- 流动性风险
-- 集中度风险
-
-#### 四、适合谁
-- 风险承受能力匹配
-- 投资期限匹配
-- 资金规模匹配
-
-#### 五、操作策略
-- 具体配置比例
-- 再平衡规则
-- 调仓触发条件
-
-#### 六、如果判断错了
-- 止损线设置
-- 应急预案
-- 调整方案
-
----
+1. 列出策略/数据时点、来源、币种和单位。
+2. 区分用户目标、历史观测、场景假设和机械计算。
+3. 显示费用、现金流、数据频率和相关性等限制。
+4. 不把历史表现、基准差或情景配置写成未来收益承诺。
+5. 执行任何配置变化前，由用户另行确认产品、金额、账户、费用和税务影响。
 
 ## 数据存储
 
-| 文件 | 位置 |
-|------|------|
-| 配置方案 | `${CODEX_DATA_DIR:-./codex-data}/skills/wealth-allocation/allocations.json` |
-| 组合数据 | `${CODEX_DATA_DIR:-./codex-data}/skills/wealth-allocation/portfolios.json` |
-| 追踪记录 | `${CODEX_DATA_DIR:-./codex-data}/skills/wealth-allocation/tracking.json` |
-| 再平衡记录 | `${CODEX_DATA_DIR:-./codex-data}/skills/wealth-allocation/rebalance.json` |
-
-**跨平台说明：**
-- 默认存储在用户主目录下的 `codex-data` 文件夹
-- 可通过环境变量 `CODEX_DATA_DIR` 自定义存储位置
-- Windows: `C:\Users\<用户名>\codex-data\`
-- macOS/Linux: `./codex-data/`
-
----
-
-## Important Notes
-
-- 资产配置是长期策略，不要因短期波动轻易改变
-- 再平衡是"低买高卖"的纪律化实现
-- 生存资产是安全垫，永远不要满仓
-- 定期检视（至少每季度一次），但避免过度交易
-- 所有建议仅供参考，不构成投资建议
+建议写入 `${CODEX_DATA_DIR:-./codex-data}/wealth-allocation/`。公开能力包不包含账户、持仓、净值或个人财务数据。

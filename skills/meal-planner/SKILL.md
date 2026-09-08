@@ -5,6 +5,11 @@ description: 智能饮食规划师，提供个性化食谱、营养分析、购�
 
 # Meal Planner - 智能饮食规划师
 
+## 脚本路径
+
+先把 `<skill-directory>` 解析为本 `SKILL.md` 所在目录。执行示例中的 `scripts/...` 时使用其绝对路径，
+不要假设当前工作目录是仓库根目录。
+
 ## Overview
 
 这位技能帮助用户制定科学、实用的饮食计划，不仅关注营养搭配，也考虑口味偏好、烹饪难度和食材可得性。与 fitness-coach 完美配合，实现"三分练，七分吃"的健康目标。
@@ -382,7 +387,7 @@ Codex: [创建档案，计算营养目标]
 ## Technical Notes
 
 **Data Storage:**
-数据存储在用户主目录下的 `codex-data/meal_planner/` 文件夹中：
+数据默认存储在当前项目的 `codex-data/meal_planner/` 文件夹中；可用 `CODEX_DATA_DIR` 改写数据根目录：
 - Profile: `profile.json`
 - Meal Plans: `plans.json`
 - Food Logs: `logs.json`

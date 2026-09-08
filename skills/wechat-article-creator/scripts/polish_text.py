@@ -41,7 +41,7 @@ class ArticlePolisher:
         
         for phrase in empty_phrases:
             if phrase in text:
-                self.issues.append(f"❌ Empty phrase found: '{phrase}' - be more specific")
+                self.issues.append(f"Empty phrase found: '{phrase}' - be more specific")
     
     def check_paragraph_structure(self, text: str) -> None:
         """Check if paragraphs are well-structured"""
@@ -59,7 +59,7 @@ class ArticlePolisher:
         has_story = any(keyword in text for keyword in story_keywords)
         
         if not has_story:
-            self.suggestions.append("💡 Consider adding more stories or examples to make it relatable")
+            self.suggestions.append("Consider adding more stories or examples to make it relatable")
     
     def check_data_support(self, text: str) -> None:
         """Check if article has data support"""
@@ -67,7 +67,7 @@ class ArticlePolisher:
         has_data = any(re.search(pattern, text) for pattern in data_patterns)
         
         if not has_data:
-            self.suggestions.append("💡 Consider adding data/numbers to support your points")
+            self.suggestions.append("Consider adding data/numbers to support your points")
     
     def check_opinions(self, text: str) -> None:
         """Check if article has clear opinions"""
@@ -75,7 +75,7 @@ class ArticlePolisher:
         has_opinion = any(keyword in text for keyword in opinion_keywords)
         
         if not has_opinion:
-            self.suggestions.append("⚠️ Consider expressing clearer personal opinions or viewpoints")
+            self.suggestions.append("Consider expressing clearer personal opinions or viewpoints")
     
     def polish(self, text: str) -> dict:
         """Run all checks"""
@@ -102,65 +102,51 @@ class ArticlePolisher:
 def main():
     parser = argparse.ArgumentParser(description="Polish WeChat article")
     parser.add_argument("file", help="Article file path (.md or .txt)")
-    parser.add_argument("--auto-fix", action="store_true", help="Auto-fix simple issues")
     
     args = parser.parse_args()
     
     file_path = Path(args.file)
     if not file_path.exists():
-        print(f"❌ File not found: {file_path}")
-        return
+        print(f"File not found: {file_path}")
+        return 1
     
     text = file_path.read_text(encoding='utf-8')
     polisher = ArticlePolisher()
     result = polisher.polish(text)
     
     print("=" * 60)
-    print("📊 ARTICLE ANALYSIS")
+    print("ARTICLE ANALYSIS")
     print("=" * 60)
-    print(f"📝 Word count: {result['word_count']}")
-    print(f"📄 Paragraph count: {result['paragraph_count']}")
-    print(f"📏 Avg paragraph length: {result['avg_paragraph_length']} chars")
+    print(f"Word count: {result['word_count']}")
+    print(f"Paragraph count: {result['paragraph_count']}")
+    print(f"Avg paragraph length: {result['avg_paragraph_length']} chars")
     print()
     
     if result['issues']:
-        print("❌ ISSUES TO FIX:")
+        print("ISSUES TO FIX:")
         print("-" * 60)
         for issue in result['issues']:
-            print(f"  • {issue}")
+            print(f"  - {issue}")
         print()
     else:
-        print("✅ No critical issues found!")
+        print("No critical issues found.")
         print()
     
     if result['suggestions']:
-        print("💡 SUGGESTIONS:")
+        print("SUGGESTIONS:")
         print("-" * 60)
         for suggestion in result['suggestions']:
-            print(f"  • {suggestion}")
+            print(f"  - {suggestion}")
         print()
     else:
-        print("🎉 Article looks great!")
+        print("No rule-based issues or suggestions were generated.")
         print()
     
-    # Overall score
-    total_checks = 7
-    issues_count = len(result['issues'])
-    suggestions_count = len(result['suggestions'])
-    
-    score = max(0, 100 - (issues_count * 10) - (suggestions_count * 5))
-    
     print("=" * 60)
-    print(f"📈 OVERALL SCORE: {score}/100")
+    print("Rule-based checks complete. Results are editorial prompts, not a publication-readiness score.")
     print("=" * 60)
-    
-    if score >= 80:
-        print("🎉 Great article! Ready to publish.")
-    elif score >= 60:
-        print("👍 Good article. Address suggestions to improve.")
-    else:
-        print("⚠️ Needs work. Fix issues before publishing.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

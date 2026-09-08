@@ -5,6 +5,11 @@ description: 日复盘助手，帮助用户记录每日反思、追踪目标进�
 
 # Daily Reflection - 日复盘助手
 
+## 脚本路径
+
+先把 `<skill-directory>` 解析为本 `SKILL.md` 所在目录。执行示例中的 `scripts/...` 时使用其绝对路径，
+不要假设当前工作目录是仓库根目录。
+
 ## Overview
 
 这位技能帮助用户建立每日反思习惯，通过结构化的问题引导，记录成长轨迹，追踪目标进度，管理情绪变化。温柔陪伴，不强求，让反思成为自然的生活方式。
@@ -778,7 +783,7 @@ Codex: [创建档案]
 ## Technical Notes
 
 **Data Storage:**
-数据存储在用户主目录下的 `codex-data/daily_reflection/` 文件夹中：
+数据默认存储在当前项目的 `codex-data/daily_reflection/` 文件夹中；可用 `CODEX_DATA_DIR` 改写数据根目录：
 - Profile: `profile.json`
 - Reflections: `reflections.json`
 - Habits: `habits.json`

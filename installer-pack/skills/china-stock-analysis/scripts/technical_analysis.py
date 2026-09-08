@@ -14,6 +14,8 @@ Usage:
 
 import argparse
 import json
+import re
+import sys
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 
@@ -240,8 +242,8 @@ def identify_support_resistance(prices: List[float], highs: List[float],
         "resistance": round(resistance, 2),
         "dist_to_support": round(dist_to_support, 2),
         "dist_to_resistance": round(dist_to_resistance, 2),
-        "near_support": dist_to_support < 3,
-        "near_resistance": dist_to_resistance < 3
+        "window": period,
+        "notice": "support/resistance 仅表示窗口最低/最高价，不是交易触发位。"
     }
 
 
@@ -263,9 +265,6 @@ def generate_technical_analysis(code: str, prices: List[float],
     trend = identify_trend(prices, ma5, ma20)
     sr = identify_support_resistance(prices, highs, lows)
     
-    # 综合评分
-    score = calculate_technical_score(macd, rsi, kdj, trend, boll)
-    
     return {
         "analyzed_at": datetime.now().isoformat(),
         "code": code,
@@ -285,137 +284,37 @@ def generate_technical_analysis(code: str, prices: List[float],
         },
         "trend": trend,
         "support_resistance": sr,
-        "technical_score": score,
-        "signals": generate_signals(macd, rsi, kdj, trend, sr),
-        "suggestions": generate_technical_suggestions(score, trend, sr)
+        "rule_observations": generate_rule_observations(macd, rsi, kdj, trend, boll),
+        "methodology": "指标使用固定公开算式；规则观察只描述当前样本条件，不评分、不预测价格、不生成买卖或止损建议。"
     }
 
 
-def calculate_technical_score(macd: Dict, rsi: float, kdj: Dict, 
-                              trend: Dict, boll: Dict) -> Dict:
-    """计算技术评分"""
-    score = 50  # 中性
-    
-    # MACD
-    if macd.get("macd", 0) > 0:
-        score += 10
-    if macd.get("signal") == "金叉":
-        score += 15
-    elif macd.get("signal") == "死叉":
-        score -= 15
-    
-    # RSI
-    if 40 <= rsi <= 60:
-        score += 5
-    elif rsi < 30:
-        score += 10  # 超卖
-    elif rsi > 70:
-        score -= 10  # 超买
-    
-    # KDJ
-    if kdj.get("signal") == "金叉":
-        score += 10
-    elif kdj.get("signal") == "死叉":
-        score -= 10
-    
-    # 趋势
-    score += trend.get("strength", 0) * 3
-    
-    # 布林带位置
-    if boll.get("position") == "下轨下方":
-        score += 10
-    elif boll.get("position") == "上轨上方":
-        score -= 10
-    
-    score = max(0, min(100, score))
-    
-    if score >= 70:
-        rating = "看多"
-    elif score >= 55:
-        rating = "偏多"
-    elif score >= 45:
-        rating = "中性"
-    elif score >= 30:
-        rating = "偏空"
-    else:
-        rating = "看空"
-    
-    return {"score": score, "rating": rating}
-
-
-def generate_signals(macd: Dict, rsi: float, kdj: Dict, 
-                    trend: Dict, sr: Dict) -> List[str]:
-    """生成交易信号"""
-    signals = []
-    
-    if macd.get("signal") == "金叉":
-        signals.append("MACD金叉，短期看涨")
-    elif macd.get("signal") == "死叉":
-        signals.append("MACD死叉，短期看跌")
-    
-    if rsi < 30:
-        signals.append("RSI超卖，可能反弹")
-    elif rsi > 70:
-        signals.append("RSI超买，可能回调")
-    
-    if kdj.get("signal") == "金叉":
-        signals.append("KDJ金叉，买入信号")
-    elif kdj.get("signal") == "死叉":
-        signals.append("KDJ死叉，卖出信号")
-    
-    if sr.get("near_support"):
-        signals.append(f"接近支撑位{sr['support']}，关注反弹")
-    if sr.get("near_resistance"):
-        signals.append(f"接近阻力位{sr['resistance']}，注意压力")
-    
-    if not signals:
-        signals.append("暂无明确信号，观望为主")
-    
-    return signals
-
-
-def generate_technical_suggestions(score: Dict, trend: Dict, sr: Dict) -> List[str]:
-    """生成操作建议"""
-    suggestions = []
-    
-    if score["score"] >= 70:
-        suggestions.append("技术面向好，可考虑逢低买入")
-    elif score["score"] <= 30:
-        suggestions.append("技术面偏弱，建议观望或减仓")
-    else:
-        suggestions.append("技术面中性，维持现有仓位")
-    
-    if sr.get("near_support"):
-        suggestions.append(f"可在支撑位{sr['support']}附近试探性买入")
-    if sr.get("near_resistance"):
-        suggestions.append(f"可在阻力位{sr['resistance']}附近减仓")
-    
-    suggestions.append("技术指标仅供参考，需结合基本面综合判断")
-    suggestions.append("设置止损位，控制风险")
-    
-    return suggestions
+def generate_rule_observations(macd: Dict, rsi: float, kdj: Dict, trend: Dict, boll: Dict) -> Dict:
+    """Expose rule conditions without translating them into an action or forecast."""
+    return {
+        "macd_latest_cross": macd.get("signal", "无"),
+        "rsi_below_30": rsi < 30,
+        "rsi_above_70": rsi > 70,
+        "kdj_latest_cross": kdj.get("signal", "无"),
+        "moving_average_rule": trend.get("trend", "unknown"),
+        "bollinger_position": boll.get("position", "unknown"),
+        "thresholds": {"rsi_low": 30, "rsi_high": 70},
+        "notice": "这些是规则条件是否成立的记录，不代表未来方向或交易信号。",
+    }
 
 
 def format_report(report: Dict) -> str:
-    """格式化技术分析报告（投资官六段式）"""
+    """格式化中性的技术指标报告。"""
     
     ma = report["moving_averages"]
     ind = report["indicators"]
-    score = report["technical_score"]
-    
     lines = [
         "=" * 60,
-        f"技术分析报告 - {report['code']}",
+        f"技术指标报告 - {report['code']}",
         "=" * 60,
-        "",
-        "## 🧭 投资官视角",
-        "",
-        "### 一、核心结论",
         f"【当前价格】{report['current_price']:.2f}",
-        f"【技术评分】{score['score']:.0f}/100 - {score['rating']}",
-        f"【趋势判断】{report['trend']['trend']}",
+        f"【均线规则状态】{report['trend']['trend']}",
         "",
-        "### 二、背后逻辑",
         "【均线系统】",
         f"• MA5: {ma['ma5']:.2f}" if ma['ma5'] else "• MA5: N/A",
         f"• MA10: {ma['ma10']:.2f}" if ma['ma10'] else "• MA10: N/A",
@@ -436,41 +335,20 @@ def format_report(report: Dict) -> str:
         f"• 阻力位: {report['support_resistance']['resistance']:.2f} "
         f"(距离{report['support_resistance']['dist_to_resistance']:.1f}%)",
         "",
-        "### 三、风险在哪里",
-        "⚠️ 技术分析基于历史数据，不保证未来走势",
-        "⚠️ 单一指标不可靠，需多指标共振",
-        "⚠️ 突发事件可能导致技术形态失效",
-        "⚠️ 震荡市技术指标容易发出错误信号",
-        "",
-        "### 四、适合谁",
-        "• 进行中短期交易的投资者",
-        "• 希望把握买卖时机的技术派投资者",
-        "• 已有基本面判断、需要择时的投资者",
-        "",
-        "### 五、操作策略",
-        "【交易信号】",
+        "【规则条件】",
     ]
-    
-    for signal in report["signals"]:
-        lines.append(f"• {signal}")
-    
+    for key, value in report["rule_observations"].items():
+        if key != "notice":
+            lines.append(f"• {key}: {value}")
     lines.extend([
         "",
-        "【操作建议】",
-    ])
-    
-    for suggestion in report["suggestions"]:
-        lines.append(f"✓ {suggestion}")
-    
-    lines.extend([
-        "",
-        "### 六、如果判断错了",
-        "• 如买入后跌破支撑位，及时止损",
-        "• 如卖出后突破阻力位，不要追高",
-        "• 如指标背离，以价格走势为准",
-        "• 建议单笔亏损不超过总资金的2%",
+        f"规则边界：{report['rule_observations']['notice']}",
+        f"方法边界：{report['methodology']}",
         "",
         "=" * 60,
+        f"数据来源：{report.get('data_source', '未记录')}",
+        f"数据时点：{report.get('data_as_of', '未记录')}",
+        f"复权方式：{report.get('price_adjustment', '未记录')}；样本数：{report.get('observations', 0)}",
         f"分析时间：{report['analyzed_at']}",
         "=" * 60
     ])
@@ -478,29 +356,52 @@ def format_report(report: Dict) -> str:
     return "\n".join(lines)
 
 
-def fetch_mock_data(code: str, period: str) -> Tuple[List[float], List[float], List[float], List[float]]:
-    """获取模拟数据（实际应使用akshare获取真实数据）"""
-    import random
-    
-    # 生成模拟价格数据
-    base_price = random.uniform(10, 100)
-    prices = [base_price]
-    highs = [base_price * 1.02]
-    lows = [base_price * 0.98]
-    volumes = [random.randint(1000000, 10000000)]
-    
-    for _ in range(99):
-        change = random.uniform(-0.03, 0.03)
-        new_price = prices[-1] * (1 + change)
-        prices.append(new_price)
-        highs.append(new_price * random.uniform(1.0, 1.03))
-        lows.append(new_price * random.uniform(0.97, 1.0))
-        volumes.append(random.randint(1000000, 10000000))
-    
-    return prices, highs, lows, volumes
+def fetch_market_data(
+    code: str,
+    period: str,
+    days: int,
+) -> Tuple[List[float], List[float], List[float], List[float], str]:
+    """从 AkShare 获取真实 K 线；缺少依赖或数据时明确失败。"""
+    if not re.fullmatch(r"\d{6}", str(code or "")):
+        raise ValueError("股票代码必须是 6 位数字。")
+    if period not in {"daily", "weekly", "monthly"}:
+        raise ValueError("period 必须是 daily、weekly 或 monthly。")
+    if not isinstance(days, int) or not 60 <= days <= 2000:
+        raise ValueError("days 必须是 60 到 2000 的整数，以保证指标有足够样本。")
+    try:
+        import akshare as ak
+    except ImportError as error:
+        raise RuntimeError("缺少 akshare；请先完成该 Skill 的 Python 运行时安装。") from error
+
+    calendar_multiplier = {"daily": 3, "weekly": 10, "monthly": 40}[period]
+    end_date = datetime.now().strftime("%Y%m%d")
+    start_date = (datetime.now() - timedelta(days=max(days * calendar_multiplier, 180))).strftime("%Y%m%d")
+    frame = ak.stock_zh_a_hist(
+        symbol=code,
+        period=period,
+        start_date=start_date,
+        end_date=end_date,
+        adjust="qfq",
+    )
+    if frame is None or frame.empty:
+        raise RuntimeError(f"AkShare 未返回 {code} 的 {period} K 线数据。")
+    required_columns = {"日期", "收盘", "最高", "最低", "成交量"}
+    missing_columns = required_columns.difference(frame.columns)
+    if missing_columns:
+        raise RuntimeError(f"AkShare K 线缺少字段：{sorted(missing_columns)}")
+    frame = frame.tail(days)
+    if len(frame) < 60:
+        raise RuntimeError(f"有效 K 线只有 {len(frame)} 条，至少需要 60 条。")
+
+    prices = [float(value) for value in frame["收盘"].tolist()]
+    highs = [float(value) for value in frame["最高"].tolist()]
+    lows = [float(value) for value in frame["最低"].tolist()]
+    volumes = [float(value) for value in frame["成交量"].tolist()]
+    as_of = str(frame["日期"].tolist()[-1])
+    return prices, highs, lows, volumes, as_of
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="A股技术分析器")
     parser.add_argument("--code", type=str, required=True,
                        help="股票代码")
@@ -515,13 +416,16 @@ def main():
     args = parser.parse_args()
     
     try:
-        # 获取数据（实际应使用akshare）
-        prices, highs, lows, volumes = fetch_mock_data(args.code, args.period)
+        prices, highs, lows, volumes, data_as_of = fetch_market_data(args.code, args.period, args.days)
         
         # 生成分析
         report = generate_technical_analysis(
             args.code, prices, highs, lows, volumes, args.period
         )
+        report["data_source"] = "AkShare stock_zh_a_hist"
+        report["data_as_of"] = data_as_of
+        report["price_adjustment"] = "qfq"
+        report["observations"] = len(prices)
         
         if args.json or args.output:
             output = json.dumps(report, ensure_ascii=False, indent=2)
@@ -533,11 +437,15 @@ def main():
                 print(output)
         else:
             print(format_report(report))
-            
+        return 0
     except Exception as e:
-        print(f"分析失败: {e}")
-        print("提示：当前使用模拟数据，实际使用时需要安装akshare并接入真实数据源")
+        error = {"error": str(e), "code": args.code, "period": args.period}
+        if args.json:
+            print(json.dumps(error, ensure_ascii=False))
+        else:
+            print(f"分析失败: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

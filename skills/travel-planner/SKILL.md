@@ -1,9 +1,14 @@
 ---
 name: travel-planner
-description: This skill should be used whenever users need help planning trips, creating travel itineraries, managing travel budgets, seeking destination advice, or searching for flights and transportation. On first use, collects comprehensive travel preferences including budget level, travel style, interests, and dietary restrictions. Generates detailed travel plans with day-by-day itineraries, budget breakdowns, packing checklists, cultural do's and don'ts, and region-specific schedules. Maintains database of preferences and past trips for personalized recommendations. When user mentions flight tickets (机票), airfare, flight booking, or transportation search, this skill should be invoked to handle the request using web-search-extraction for real-time information.
+description: This skill should be used whenever users need help planning trips, creating travel itineraries, managing travel budgets, seeking destination advice, or researching flights and transportation. It collects travel preferences, generates day-by-day plans, budget breakdowns, packing lists, cultural guidance, and can maintain local trip preferences. For live prices, schedules, entry rules, weather, or safety information, use the current Codex session's native web tools when available and state freshness limits.
 ---
 
 # Travel Planner
+
+## Script path
+
+Resolve `<skill-directory>` to the directory containing this `SKILL.md`. Execute every `scripts/...` example by its absolute path;
+do not assume the current working directory is the repository root.
 
 ## Overview
 
@@ -143,26 +148,9 @@ trip_id = add_trip(trip, status="current")
 
 ### Step 4: Search Flights (if needed)
 
-当用户需要查询机票时，使用 web-search-extraction 技能：
-
-**调用方式：**
-
-```bash
-# 查询航班信息
-python skills/web-search-extraction/scripts/web_search.py "[出发地]到[目的地] [日期] 机票 航班" --json
-
-# 查询机票价格
-python skills/web-search-extraction/scripts/web_search.py "[出发地]到[目的地] 机票价格  cheapest" --json
-
-# 查询航空公司
-python skills/web-search-extraction/scripts/web_search.py "[出发地]到[目的地] 直飞航班 航空公司" --json
-```
-
-**示例：**
-
-```bash
-python skills/web-search-extraction/scripts/web_search.py "北京到成都 6月15日 机票 价格" --json
-```
+用户需要查询机票时，优先使用当前 Codex 会话提供的网页搜索/浏览能力，至少核验航空公司或机场等一手来源。
+搜索条件应包含出发地、目的地、完整日期、乘客数、舱位和是否接受中转。当前会话不能联网时，输出查询清单和比价方法，
+不要给出看似实时的班次或价格。
 
 **输出内容：**
 - 航班时刻表
@@ -172,35 +160,8 @@ python skills/web-search-extraction/scripts/web_search.py "北京到成都 6月1
 
 ### Step 5: Research Destination
 
-**使用 web-search-extraction 技能搜索目的地信息**
-
-**调用方式：**
-
-```bash
-# 签证和入境要求
-python skills/web-search-extraction/scripts/web_search.py "[目的地] 签证要求 中国公民 2024" --json
-
-# 最佳旅行时间
-python skills/web-search-extraction/scripts/web_search.py "[目的地] 最佳旅游时间 天气 季节" --json
-
-# 必去景点
-python skills/web-search-extraction/scripts/web_search.py "[目的地] 必去景点 旅游攻略" --json
-
-# 美食推荐
-python skills/web-search-extraction/scripts/web_search.py "[目的地] 特色美食 餐厅推荐" --json
-
-# 住宿区域
-python skills/web-search-extraction/scripts/web_search.py "[目的地] 住哪里方便 酒店推荐 区域" --json
-
-# 交通指南
-python skills/web-search-extraction/scripts/web_search.py "[目的地] 交通攻略 地铁 公交 打车" --json
-
-# 避坑指南
-python skills/web-search-extraction/scripts/web_search.py "[目的地] 旅游避坑 注意事项 骗局" --json
-
-# 行程参考
-python skills/web-search-extraction/scripts/web_search.py "[目的地] [天数]天行程 旅游攻略" --json
-```
+使用当前 Codex 会话提供的网页搜索/浏览能力研究目的地；优先查政府、使领馆、交通运营方和景点官网。
+签证、入境、天气、安全、营业时间和票价都必须记录来源及核验日期。当前会话不能联网时，明确列出待核验项。
 
 **需要收集的信息：**
 1. **Entry Requirements** - 签证、护照、疫苗要求
@@ -545,7 +506,7 @@ Would you like me to adjust anything in the itinerary?
 ## Technical Notes
 
 **Data Storage:**
-数据存储在用户主目录下的 `codex-data/travel_planner/` 文件夹中：
+数据默认存储在当前项目的 `codex-data/travel_planner/` 文件夹中；可用 `CODEX_DATA_DIR` 改写数据根目录：
 - Preferences: `preferences.json`
 - Trips: `trips.json`
 

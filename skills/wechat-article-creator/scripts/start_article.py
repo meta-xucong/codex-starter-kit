@@ -3,17 +3,37 @@
 Quick start a new WeChat article with template
 """
 import argparse
+import os
 from pathlib import Path
 from datetime import datetime
 
 
+def resolve_article_data_dir() -> Path:
+    explicit = str(os.environ.get("WECHAT_ARTICLE_DATA_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    root = Path(os.environ.get("CODEX_DATA_DIR", Path.cwd() / "codex-data"))
+    return (root.expanduser() / "wechat-article-creator").resolve()
+
+
+def safe_filename_component(value: str) -> str:
+    safe = []
+    for char in str(value or "").strip():
+        if char.isalnum() or char in {"-", "_"}:
+            safe.append(char)
+        elif char.isspace():
+            safe.append("_")
+    normalized = "".join(safe).strip("._-")[:80]
+    return normalized or "article"
+
+
 def create_article(title: str, topic: str = ""):
     """Create new article file from template"""
-    drafts_dir = Path(__file__).parent.parent / "drafts"
-    drafts_dir.mkdir(exist_ok=True)
+    drafts_dir = resolve_article_data_dir() / "drafts"
+    drafts_dir.mkdir(parents=True, exist_ok=True)
     
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{timestamp}_{title.replace(' ', '_')}.md"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    filename = f"{timestamp}_{safe_filename_component(title)}.md"
     
     template = f"""# {title}
 
@@ -94,11 +114,12 @@ def create_article(title: str, topic: str = ""):
     file_path = drafts_dir / filename
     file_path.write_text(template, encoding='utf-8')
     
-    print(f"✅ Article created: {file_path}")
-    print(f"\n💡 Next steps:")
+    print(f"Article created: {file_path}")
+    print("\nNext steps:")
     print(f"   1. Edit the article: {file_path}")
-    print(f"   2. Polish the text: python scripts/polish_text.py {file_path}")
-    print(f"   3. Generate cover: python scripts/generate_cover.py --title \"{title}\" --style modern")
+    scripts_dir = Path(__file__).resolve().parent
+    print(f"   2. Polish the text: python \"{scripts_dir / 'polish_text.py'}\" \"{file_path}\"")
+    print(f"   3. Generate cover: python \"{scripts_dir / 'generate_cover.py'}\" --title <title> --style modern")
     
     return str(file_path)
 

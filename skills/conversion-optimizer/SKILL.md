@@ -1,7 +1,6 @@
 ---
 name: conversion-optimizer
 description: 优化转化链路，设计高成交销售话术与页面
-tags: [growth, conversion, sales, copywriting]
 ---
 
 # 转化优化师 - Conversion Optimizer

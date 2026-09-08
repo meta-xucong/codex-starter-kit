@@ -3,328 +3,182 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""
-资产配置工具 - 基于标准普尔家庭资产配置模型
+"""Render an amount allocation from an explicit, attributable policy template."""
 
-Usage:
-    python asset_allocator.py --amount 1000000 --period "5年" --max-drawdown 15
-    python asset_allocator.py --amount 500000 --experience "新手" --monthly-expense 15000
-"""
+from __future__ import annotations
 
 import argparse
 import json
+import math
+import sys
 from datetime import datetime
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict
 
 
-def determine_risk_level(
-    max_drawdown: float,
-    period_years: float,
-    experience: str
-) -> str:
-    """确定风险等级"""
-    # 经验调整
-    exp_factor = {"新手": -10, "中等": 0, "丰富": 10}
-    adjusted_drawdown = max_drawdown + exp_factor.get(experience, 0)
-    
-    # 期限调整
-    if period_years < 1:
-        adjusted_drawdown -= 10
-    elif period_years > 5:
-        adjusted_drawdown += 5
-    
-    if adjusted_drawdown < 5:
-        return "保守型"
-    elif adjusted_drawdown < 15:
-        return "稳健型"
-    elif adjusted_drawdown < 25:
-        return "平衡型"
-    elif adjusted_drawdown < 35:
-        return "积极型"
-    else:
-        return "激进型"
+MAX_TEMPLATE_BYTES = 1024 * 1024
+BUCKETS = ("survival", "growth", "aggressive")
 
 
-def get_allocation_template(risk_level: str) -> Dict:
-    """获取配置模板"""
-    templates = {
-        "保守型": {
-            "survival": 0.60,      # 生存资产
-            "growth": 0.35,        # 增值资产
-            "aggressive": 0.05,    # 进攻资产
-            "expected_return": 4,
-            "max_drawdown": 5
-        },
-        "稳健型": {
-            "survival": 0.50,
-            "growth": 0.40,
-            "aggressive": 0.10,
-            "expected_return": 6,
-            "max_drawdown": 12
-        },
-        "平衡型": {
-            "survival": 0.40,
-            "growth": 0.45,
-            "aggressive": 0.15,
-            "expected_return": 8,
-            "max_drawdown": 20
-        },
-        "积极型": {
-            "survival": 0.30,
-            "growth": 0.45,
-            "aggressive": 0.25,
-            "expected_return": 10,
-            "max_drawdown": 30
-        },
-        "激进型": {
-            "survival": 0.20,
-            "growth": 0.40,
-            "aggressive": 0.40,
-            "expected_return": 12,
-            "max_drawdown": 40
-        }
+def _number(data: Dict, key: str, minimum=None, maximum=None) -> float:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{key} 必须是显式提供的数字。")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ValueError(f"{key} 必须是有限数字。")
+    if minimum is not None and normalized < minimum:
+        raise ValueError(f"{key} 不得小于 {minimum}。")
+    if maximum is not None and normalized > maximum:
+        raise ValueError(f"{key} 不得大于 {maximum}。")
+    return normalized
+
+
+def validate_policy_template(template: Dict) -> Dict:
+    """Validate a user-reviewed policy; no risk profile or return is guessed."""
+    if not isinstance(template, dict):
+        raise ValueError("策略模板 JSON 顶层必须是对象。")
+    texts = {}
+    for key in ("risk_level", "description", "as_of"):
+        value = str(template.get(key) or "").strip()
+        if not value:
+            raise ValueError(f"策略模板缺少 {key}。")
+        texts[key] = value
+    sources = template.get("sources")
+    if not isinstance(sources, list) or not sources or not all(isinstance(item, str) and item.strip() for item in sources):
+        raise ValueError("sources 必须至少包含一个非空的制定依据或来源。")
+
+    allocation_raw = template.get("allocation")
+    if not isinstance(allocation_raw, dict) or set(allocation_raw) != set(BUCKETS):
+        raise ValueError(f"allocation 必须且只能包含 {list(BUCKETS)}。")
+    allocation = {
+        bucket: _number({bucket: allocation_raw[bucket]}, bucket, 0, 100)
+        for bucket in BUCKETS
     }
-    return templates.get(risk_level, templates["稳健型"])
+    if not math.isclose(sum(allocation.values()), 100.0, abs_tol=0.01):
+        raise ValueError("allocation 百分比合计必须为 100。")
+
+    return {
+        **texts,
+        "sources": [item.strip() for item in sources],
+        "allocation": allocation,
+        "scenario_annual_return": _number(template, "scenario_annual_return", -100, 1000),
+        "scenario_max_drawdown": _number(template, "scenario_max_drawdown", 0, 100),
+        "emergency_months": _number(template, "emergency_months", 0, 120),
+        "rebalance_threshold": _number(template, "rebalance_threshold", 0, 100),
+    }
 
 
 def generate_allocation_plan(
     total_amount: float,
-    risk_level: str,
     monthly_expense: float,
-    period_years: float
+    period_years: float,
+    template: Dict,
 ) -> Dict:
-    """生成资产配置方案"""
-    template = get_allocation_template(risk_level)
-    
-    # 计算各层金额
-    survival_amount = total_amount * template["survival"]
-    growth_amount = total_amount * template["growth"]
-    aggressive_amount = total_amount * template["aggressive"]
-    
-    # 生存资产细分
-    emergency_fund = max(monthly_expense * 6, survival_amount * 0.40)
-    short_term = max(monthly_expense * 6, survival_amount * 0.40)
-    safe_buffer = survival_amount - emergency_fund - short_term
-    
-    plan = {
+    """Convert explicit policy percentages to amounts and expose every assumption."""
+    template = validate_policy_template(template)
+    for name, value in (("total_amount", total_amount), ("monthly_expense", monthly_expense), ("period_years", period_years)):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} 必须是正数。")
+
+    allocations = {
+        bucket: {
+            "ratio": template["allocation"][bucket],
+            "amount": round(total_amount * template["allocation"][bucket] / 100, 2),
+        }
+        for bucket in BUCKETS
+    }
+    emergency_target = monthly_expense * template["emergency_months"]
+    survival_amount = allocations["survival"]["amount"]
+    return {
         "generated_at": datetime.now().isoformat(),
-        "risk_level": risk_level,
+        "policy_as_of": template["as_of"],
+        "sources": template["sources"],
+        "risk_level": template["risk_level"],
+        "description": template["description"],
         "total_amount": total_amount,
         "monthly_expense": monthly_expense,
         "investment_period_years": period_years,
-        "expected_annual_return": template["expected_return"],
-        "expected_max_drawdown": template["max_drawdown"],
-        "allocation": {
-            "survival": {
-                "ratio": template["survival"],
-                "amount": survival_amount,
-                "details": {
-                    "emergency_fund": {
-                        "amount": emergency_fund,
-                        "ratio": emergency_fund / total_amount,
-                        "tools": ["货币基金", "活期存款"],
-                        "purpose": "3-6个月生活费"
-                    },
-                    "short_term": {
-                        "amount": short_term,
-                        "ratio": short_term / total_amount,
-                        "tools": ["短债基金", "定期存款"],
-                        "purpose": "1年内可能用到的钱"
-                    },
-                    "safe_buffer": {
-                        "amount": max(0, safe_buffer),
-                        "ratio": max(0, safe_buffer) / total_amount,
-                        "tools": ["国债", "大额存单"],
-                        "purpose": "绝对安全垫"
-                    }
-                }
-            },
-            "growth": {
-                "ratio": template["growth"],
-                "amount": growth_amount,
-                "details": {
-                    "index_funds": {
-                        "amount": growth_amount * 0.40,
-                        "ratio": template["growth"] * 0.40,
-                        "tools": ["沪深300ETF", "中证500ETF"],
-                        "purpose": "市场平均收益"
-                    },
-                    "bond_funds": {
-                        "amount": growth_amount * 0.35,
-                        "ratio": template["growth"] * 0.35,
-                        "tools": ["纯债基金", "二级债基"],
-                        "purpose": "稳定收益"
-                    },
-                    "quality_stocks": {
-                        "amount": growth_amount * 0.25,
-                        "ratio": template["growth"] * 0.25,
-                        "tools": ["蓝筹股", "高股息股票"],
-                        "purpose": "长期增值"
-                    }
-                }
-            },
-            "aggressive": {
-                "ratio": template["aggressive"],
-                "amount": aggressive_amount,
-                "details": {
-                    "growth_funds": {
-                        "amount": aggressive_amount * 0.60,
-                        "ratio": template["aggressive"] * 0.60,
-                        "tools": ["成长型基金", "科技主题基金"],
-                        "purpose": "超额收益"
-                    },
-                    "sector_etfs": {
-                        "amount": aggressive_amount * 0.40,
-                        "ratio": template["aggressive"] * 0.40,
-                        "tools": ["行业ETF", "商品基金"],
-                        "purpose": "主题机会"
-                    }
-                }
-            }
+        "scenario_annual_return": template["scenario_annual_return"],
+        "scenario_max_drawdown": template["scenario_max_drawdown"],
+        "allocation": allocations,
+        "emergency_fund": {
+            "months": template["emergency_months"],
+            "target_amount": round(emergency_target, 2),
+            "survival_bucket_amount": survival_amount,
+            "shortfall": round(max(emergency_target - survival_amount, 0), 2),
         },
-        "rebalance": {
-            "frequency": "每季度",
-            "method": "阈值再平衡",
-            "threshold": "5%",
-            "notes": "当某类资产偏离目标比例超过5%时进行调整"
-        },
-        "advice": [
-            "生存资产是安全垫，确保3-6个月生活费随时可取",
-            "增值资产是核心，建议长期持有至少3年",
-            "进攻资产是高风险部分，亏损30%需重新评估",
-            "每季度检视一次，避免频繁调仓",
-            "市场恐慌时不要满仓，保持生存资产比例"
-        ]
+        "rebalance_threshold": template["rebalance_threshold"],
+        "methodology": "所有比例、收益/回撤场景、应急月数和再平衡阈值均来自显式模板；脚本只换算金额。",
     }
-    
-    return plan
 
 
 def format_report(plan: Dict) -> str:
-    """格式化报告"""
+    labels = {"survival": "生存资产", "growth": "增值资产", "aggressive": "进攻资产"}
     lines = [
         "=" * 70,
-        "资产配置方案",
+        "资产配置场景换算",
         "=" * 70,
+        f"风险标签：{plan['risk_level']}（由模板提供）",
+        f"总资金：{plan['total_amount']:,.0f} 元；期限：{plan['investment_period_years']} 年",
+        f"场景年化收益：{plan['scenario_annual_return']}%；场景最大回撤：{plan['scenario_max_drawdown']}%",
         "",
-        f"【风险等级】{plan['risk_level']}",
-        f"【总资金】{plan['total_amount']:,.0f} 元",
-        f"【投资期限】{plan['investment_period_years']} 年",
-        "",
-        "-" * 70,
-        "预期收益与风险",
-        "-" * 70,
-        f"预期年化收益：{plan['expected_annual_return']}%",
-        f"预期最大回撤：{plan['expected_max_drawdown']}%",
-        "",
-        "-" * 70,
-        "三层资产配置",
-        "-" * 70,
-        "",
-        f"■ 生存资产（要花的钱）{plan['allocation']['survival']['ratio']*100:.0f}%",
-        f"  金额：{plan['allocation']['survival']['amount']:,.0f} 元",
     ]
-    
-    for name, detail in plan['allocation']['survival']['details'].items():
-        if detail['amount'] > 0:
-            lines.append(f"  ├── {detail['purpose']}: {detail['amount']:,.0f} 元")
-            lines.append(f"  │   工具：{'、'.join(detail['tools'])}")
-    
-    lines.extend([
-        "",
-        f"■ 增值资产（生钱的钱）{plan['allocation']['growth']['ratio']*100:.0f}%",
-        f"  金额：{plan['allocation']['growth']['amount']:,.0f} 元",
-    ])
-    
-    for name, detail in plan['allocation']['growth']['details'].items():
-        lines.append(f"  ├── {detail['purpose']}: {detail['amount']:,.0f} 元")
-        lines.append(f"  │   工具：{'、'.join(detail['tools'])}")
-    
-    lines.extend([
-        "",
-        f"■ 进攻资产（赚钱的钱）{plan['allocation']['aggressive']['ratio']*100:.0f}%",
-        f"  金额：{plan['allocation']['aggressive']['amount']:,.0f} 元",
-    ])
-    
-    for name, detail in plan['allocation']['aggressive']['details'].items():
-        lines.append(f"  ├── {detail['purpose']}: {detail['amount']:,.0f} 元")
-        lines.append(f"  │   工具：{'、'.join(detail['tools'])}")
-    
-    lines.extend([
-        "",
-        "-" * 70,
-        "再平衡策略",
-        "-" * 70,
-        f"频率：{plan['rebalance']['frequency']}",
-        f"方法：{plan['rebalance']['method']}",
-        f"阈值：偏离目标比例 {plan['rebalance']['threshold']} 时调整",
-        "",
-        "-" * 70,
-        "投资官建议",
-        "-" * 70,
-    ])
-    
-    for i, advice in enumerate(plan['advice'], 1):
-        lines.append(f"{i}. {advice}")
-    
-    lines.extend([
-        "",
-        "=" * 70,
-        "⚠️ 风险提示：以上配置基于标准普尔模型，实际收益可能不同",
-        "=" * 70,
-    ])
-    
+    for bucket in BUCKETS:
+        item = plan["allocation"][bucket]
+        lines.append(f"• {labels[bucket]}：{item['ratio']:.2f}%（{item['amount']:,.2f} 元）")
+    emergency = plan["emergency_fund"]
+    lines.extend(
+        [
+            "",
+            f"应急金目标：{emergency['months']} 个月 × 月支出 = {emergency['target_amount']:,.2f} 元",
+            f"生存资产相对目标缺口：{emergency['shortfall']:,.2f} 元",
+            f"再平衡偏离阈值：{plan['rebalance_threshold']}%",
+            "",
+            f"策略时点：{plan['policy_as_of']}",
+            "策略来源：" + "；".join(plan["sources"]),
+            f"方法边界：{plan['methodology']}",
+            "不包含具体产品推荐、交易执行或收益承诺。",
+            "=" * 70,
+        ]
+    )
     return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="资产配置工具")
+def main() -> int:
+    parser = argparse.ArgumentParser(description="显式策略模板的资产配置金额换算器")
+    parser.add_argument("--template", required=True, help="用户审阅过的策略模板 JSON")
     parser.add_argument("--amount", type=float, required=True, help="总资金（元）")
-    parser.add_argument("--period", type=str, default="3年", help="投资期限（如：1年、3年、5年）")
-    parser.add_argument("--max-drawdown", type=float, default=15, help="最大回撤容忍度（%）")
-    parser.add_argument("--monthly-expense", type=float, default=10000, help="月支出（元）")
-    parser.add_argument("--experience", type=str, default="中等", 
-                       choices=["新手", "中等", "丰富"],
-                       help="投资经验")
-    parser.add_argument("--output", type=str, help="输出JSON文件")
-    parser.add_argument("--json", action="store_true", help="JSON格式输出")
-    
+    parser.add_argument("--period-years", type=float, required=True, help="投资期限（年）")
+    parser.add_argument("--monthly-expense", type=float, required=True, help="月支出（元）")
+    parser.add_argument("--output", help="输出 JSON 文件")
+    parser.add_argument("--json", action="store_true", help="JSON 格式输出")
     args = parser.parse_args()
-    
-    # 解析期限
-    period_years = 3
-    if "年" in args.period:
-        try:
-            period_years = float(args.period.replace("年", ""))
-        except:
-            pass
-    
-    # 确定风险等级
-    risk_level = determine_risk_level(
-        args.max_drawdown,
-        period_years,
-        args.experience
-    )
-    
-    # 生成配置方案
-    plan = generate_allocation_plan(
-        args.amount,
-        risk_level,
-        args.monthly_expense,
-        period_years
-    )
-    
-    if args.json or args.output:
-        output = json.dumps(plan, ensure_ascii=False, indent=2)
-        if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(output)
-            print(f"方案已保存到: {args.output}")
+
+    try:
+        template_path = Path(args.template).expanduser().resolve()
+        if not template_path.is_file() or template_path.stat().st_size > MAX_TEMPLATE_BYTES:
+            raise ValueError("策略模板不存在或超过 1 MiB。")
+        template = json.loads(template_path.read_text(encoding="utf-8"))
+        plan = generate_allocation_plan(args.amount, args.monthly_expense, args.period_years, template)
+        if args.json or args.output:
+            output = json.dumps(plan, ensure_ascii=False, indent=2)
+            if args.output:
+                output_path = Path(args.output).expanduser().resolve()
+                output_path.write_text(output, encoding="utf-8")
+                print(f"方案已保存到: {output_path}")
+            else:
+                print(output)
         else:
-            print(output)
-    else:
-        print(format_report(plan))
+            print(format_report(plan))
+        return 0
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        if args.json:
+            print(json.dumps({"error": str(error)}, ensure_ascii=False))
+        else:
+            print(f"资产配置场景计算失败：{error}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

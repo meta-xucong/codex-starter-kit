@@ -1,269 +1,162 @@
 ---
 name: macro-research
-description: 宏观研究工具，提供政策解读、周期判断、大类资产配置建议。基于美林时钟模型，帮助用户把握经济周期，优化资产配置决策。
-version: 1.0.0
+description: 宏观研究工作流，核验政策与经济数据，并进行来源明确的周期、政策和市场情绪情景分析。
 ---
 
-# 宏观研究技能
+# 宏观研究
 
-宏观研究工具，提供政策解读、周期判断、大类资产配置建议。基于美林时钟模型，帮助用户把握经济周期。
+## 脚本路径
 
-## When to Use
+先把 `<skill-directory>` 解析为本 `SKILL.md` 所在目录。执行 `scripts/...` 时使用其绝对路径，
+不要假设当前工作目录是仓库根目录。结果写入当前项目或用户明确指定的位置，不写入已安装 Skill 目录。
 
-当用户请求以下操作时调用此skill：
-- 解读最新经济政策
-- 判断当前经济周期位置
-- 获取大类资产配置建议
-- 分析市场情绪指标
-- 了解宏观经济趋势
+## 适用场景
 
----
+- 核验并解读最新货币、财政或产业政策
+- 用明确口径的数据做经济周期四象限分析
+- 对市场情绪数据做确定性汇总
+- 列出宏观判断的证据、反例、条件场景和待监测指标
 
-## 🔍 数据获取规范（重要）
+## 数据与结论边界
 
-### 必须使用 `web-search-extraction` 技能的场景
+宏观政策和市场数据具有强时效性。先使用当前 Codex 会话提供的网页搜索/浏览能力打开统计部门、央行、监管机构、
+交易所或其他用户认可的一手来源，记录原文链接、发布日期、统计期和单位。网页能力不可用时，只分析用户提供的
+材料，不补写“最新”数值。
 
-宏观研究涉及实时性强的数据，**必须**先使用 `web-search-extraction` 技能获取最新信息：
+三个脚本均不抓取数据，也不内置当前市场结论：
 
-| 数据类型 | 示例 | 处理方式 |
-|---------|------|---------|
-| 最新政策 | "央行降准最新公告" | `web-search-extraction` 获取原文 |
-| 经济数据 | "最新CPI数据" | `web-search-extraction` 获取 |
-| 市场动态 | "今日北向资金流向" | `web-search-extraction` 获取 |
-| 政策解读 | "证监会最新政策影响" | `web-search-extraction` 获取 |
-| 国际形势 | "美联储利率决议" | `web-search-extraction` 获取 |
+- `cycle_analyzer.py` 不内置 GDP/CPI 阈值、配置比例或转向概率。
+- `policy_analyzer.py` 不内置“某政策必然利好某板块”、止损线或调仓指令。
+- `sentiment_monitor.py` 不提供模拟指标或缺失字段默认值。
 
-### 使用示例
+输出是给定数据和规则下的情景分析，不是投资承诺。任何配置比例必须来自用户审阅的政策/规则文件，并保留依据。
 
-```
-用户：央行最近有什么政策？
+## Workflow 1：经济周期四象限
 
-步骤1：使用 web-search-extraction 技能获取最新政策
-Skill: web-search-extraction
-Args: "中国人民银行 最新货币政策 降准降息 2024 2025"
+先确认增长指标、通胀指标及各自趋势值采用同一口径与时点。`cycle_analyzer.py` 只比较这四个数值，再按审阅后的
+规则映射四象限。
 
-步骤2：用脚本进行分析和解读
-python scripts/policy_analyzer.py --type "货币政策" --action "降准"
-```
+规则文件必须包含 `as_of`、至少一个 `sources`，以及以下四个 `phase_policies`：
 
-### 注意
+- `growth_up_inflation_down`
+- `growth_up_inflation_up`
+- `growth_down_inflation_up`
+- `growth_down_inflation_down`
 
-- 宏观数据时效性强，脚本中的模拟数据仅用于演示
-- **实际回答时必须先获取最新数据**，不能仅依赖脚本输出
-- 涉及具体数字（如GDP增速、CPI数值）必须实时获取
+每个阶段至少含 `label`、`description`、非空 `characteristics`。可选 `allocation` 必须合计 100，并同时提供
+`allocation_basis`；可选 `transition` 必须含 `next_phase`、`assessment`、`basis`。脚本不会把文字“高/中/低”
+解释成统计概率。
 
-## Core Modules
-
-### 1. Policy Analyzer (政策解读器)
-货币政策、财政政策、产业政策解读
-
-### 2. Cycle Indicator (周期判断器)
-基于美林时钟的经济周期定位
-
-### 3. Asset Allocator (大类资产配置器)
-根据周期阶段推荐资产配置
-
-### 4. Sentiment Monitor (情绪监控器)
-市场情绪指标追踪
-
----
-
-## 美林时钟模型
-
-### 四个周期阶段
-
-```
-                    通胀上升
-                       ↑
-        滞胀期 ←———————→ 过热期
-    （现金为王）      （商品为王）
-         ↑                  ↓
-    通胀下降            通胀下降
-         ↑                  ↓
-        衰退期 ←———————→ 复苏期
-    （债券为王）      （股票为王）
-                       ↓
-                    通胀下降
+```text
+<python> "<skill-directory>/scripts/cycle_analyzer.py" \
+  --gdp-growth <已核验数值> \
+  --inflation <已核验数值> \
+  --gdp-trend <同口径趋势值> \
+  --inflation-trend <同口径趋势值> \
+  --data-as-of "<数据时点>" \
+  --source "<来源名称与 URL>" \
+  --rules "<reviewed-cycle-rules.json>" \
+  --json
 ```
 
-### 各阶段特征与配置
+禁止使用旧示例 `--current`；脚本没有该参数，也不会自行判断“当前”。
 
-**复苏期（股票为王）**
-- 特征：经济↑ + 通胀↓
-- 配置：股票 > 债券 > 现金 > 商品
-- 策略：增配股票，减配债券
+## Workflow 2：政策情景分析
 
-**过热期（商品为王）**
-- 特征：经济↑ + 通胀↑
-- 配置：商品 > 股票 > 现金 > 债券
-- 策略：增配商品、周期股，减配债券
+先阅读政策原文，再由 Codex 或用户把证据与假设整理成 JSON：
 
-**滞胀期（现金为王）**
-- 特征：经济↓ + 通胀↑
-- 配置：现金 > 商品 > 债券 > 股票
-- 策略：持有现金，防御为主
-
-**衰退期（债券为王）**
-- 特征：经济↓ + 通胀↓
-- 配置：债券 > 现金 > 股票 > 商品
-- 策略：增配债券，等待复苏信号
-
----
-
-## Workflow 1: Economic Cycle Analysis (经济周期分析)
-
-### 判断指标
-
-**经济增长指标**
-- GDP增速
-- PMI指数
-- 工业增加值
-- 社融规模
-
-**通胀指标**
-- CPI同比
-- PPI同比
-- 核心CPI
-
-**政策指标**
-- 央行货币政策（降准/降息）
-- 财政政策（专项债/赤字率）
-
-### 分析当前周期
-
-```bash
-python scripts/cycle_analyzer.py --current
+```json
+{
+  "as_of": "<政策/分析时点>",
+  "sources": ["<政策原文名称与 URL>"],
+  "policy_type": "<类型>",
+  "action": "<措施>",
+  "context": "<适用范围、规模、期限与背景>",
+  "evidence": ["<原文支持的事实>"],
+  "transmission_hypotheses": [
+    {
+      "statement": "<待验证的传导假设>",
+      "basis": "<支持或类比依据>",
+      "confidence": "<置信说明及原因>"
+    }
+  ],
+  "scenario_implications": [
+    {
+      "scenario": "<成立条件>",
+      "implication": "<该条件下可能影响>",
+      "monitor": ["<可证伪/确认指标>"]
+    }
+  ],
+  "risks": ["<反例、滞后或执行风险>"]
+}
 ```
 
-**输出示例：**
-```
-经济周期定位报告
-================
-
-当前阶段：复苏期 → 过热期过渡期
-
-判断依据：
-├── GDP增速：5.2%（回升中）
-├── PMI：51.2（扩张区间）
-├── CPI：2.1%（温和通胀）
-├── PPI：-0.8%（通缩压力缓解）
-└── 政策：央行降准0.5%，宽松持续
-
-建议配置：
-├── 股票：40%（增配）
-├── 债券：30%（标配）
-├── 商品：15%（开始配置）
-└── 现金：15%（标配）
-
-风险提示：关注通胀回升速度，若CPI突破3%需警惕过热
+```text
+<python> "<skill-directory>/scripts/policy_analyzer.py" \
+  --input "<verified-policy-scenario.json>" \
+  --json
 ```
 
----
+缺少来源、证据、传导依据、条件场景或风险时脚本非零退出。报告中不得把传导假设改写成确定因果或直接交易建议。
 
-## Workflow 2: Policy Interpretation (政策解读)
+## Workflow 3：市场情绪
 
-### 货币政策
+先取得同一时点、同一市场口径的数据。输入 JSON 必须包含 `as_of`、至少一个 `sources`、六项 0–100 指标、
+用户审阅且合计为 1 的六项权重、涨跌家数、当前/平均成交量、价格变化和三类资金流：
 
-**降准**
-- 影响：释放流动性，利好股市、债市
-- 适用周期：衰退期、复苏期
-
-**降息**
-- 影响：降低融资成本，利好成长股、房地产
-- 适用周期：衰退期
-
-**加息**
-- 影响：抑制通胀，利空股市、债市
-- 适用周期：过热期、滞胀期
-
-### 财政政策
-
-**扩张性财政**
-- 工具：增加赤字、发行专项债、减税降费
-- 影响：刺激经济，利好基建、周期股
-
-**紧缩性财政**
-- 工具：削减支出、增税
-- 影响：抑制过热，利空周期股
-
----
-
-## Workflow 3: Sentiment Analysis (情绪分析)
-
-### 市场情绪指标
-
-**恐惧贪婪指数**
-- 0-20：极度恐惧（抄底机会）
-- 20-40：恐惧（逐步建仓）
-- 40-60：中性（持有观望）
-- 60-80：贪婪（考虑减仓）
-- 80-100：极度贪婪（警惕风险）
-
-**资金流向**
-- 北向资金（外资）
-- 主力资金（机构）
-- 散户资金（融资余额）
-
-### 获取情绪指标
-
-```bash
-python scripts/sentiment_monitor.py
+```json
+{
+  "as_of": "<数据时点>",
+  "sources": ["<来源名称与 URL>"],
+  "indicators": {
+    "market_momentum": 0,
+    "stock_price_strength": 0,
+    "stock_price_breadth": 0,
+    "put_call_ratio": 0,
+    "market_volatility": 0,
+    "safe_haven_demand": 0
+  },
+  "weights": {
+    "market_momentum": 0,
+    "stock_price_strength": 0,
+    "stock_price_breadth": 0,
+    "put_call_ratio": 0,
+    "market_volatility": 0,
+    "safe_haven_demand": 0
+  },
+  "breadth": {"advancing_stocks": 0, "declining_stocks": 0},
+  "volume": {"current_volume": 0, "avg_volume": 1, "price_change": 0},
+  "fund_flow": {"northbound_flow": 0, "main_force_flow": 0, "retail_flow": 0}
+}
 ```
 
----
+零值仅表示字段类型，不是可用于真实报告的数据；实际权重必须合计为 1。脚本只计算合成值、广度、量比和资金流，
+不会把数值映射成“恐惧/贪婪”、加减仓或止损动作。替换为核验值后执行：
 
-## 标准输出格式
+```text
+<python> "<skill-directory>/scripts/sentiment_monitor.py" \
+  --input "<verified-sentiment-input.json>" \
+  --index "<市场或指数>" \
+  --json
+```
 
-### 🧭 投资官视角
+## 输出要求
 
-#### 一、核心结论
-（当前周期定位 + 配置建议）
+最终报告至少包含：
 
-#### 二、背后逻辑
-- 经济数据解读
-- 政策动向分析
-- 周期位置判断
+1. 数据时点、统计口径和逐项来源。
+2. 事实与解释分栏，假设明确标注。
+3. 基准场景、相反场景及各自触发条件。
+4. 主要限制、缺失数据和可能证伪判断的指标。
+5. 若涉及资产配置，注明比例来自哪份用户审阅规则，而非脚本推荐。
 
-#### 三、风险在哪里
-- 周期判断错误风险
-- 政策转向风险
-- 黑天鹅事件
+## 失败处理
 
-#### 四、适合谁
-- 中长期投资者
-- 资产配置型投资者
-
-#### 五、操作策略
-- 大类资产配置比例
-- 调仓时机
-- 止盈止损
-
-#### 六、如果判断错了
-- 周期逆转应对
-- 止损线设置
-- 调整方案
-
----
+- 来源不可访问或时点不一致：停止“当前”判断，列出待补材料。
+- JSON 缺字段、过大或类型错误：脚本非零退出，不生成部分成功报告。
+- 规则权重不等于 100：拒绝配置场景。
+- 真实市场/政策发生变化：重新获取数据并生成新文件，不覆盖来源时点。
 
 ## 数据存储
 
-| 文件 | 位置 |
-|------|------|
-| 周期分析 | `${CODEX_DATA_DIR:-./codex-data}/skills/macro-research/cycle_analysis.json` |
-| 政策解读 | `${CODEX_DATA_DIR:-./codex-data}/skills/macro-research/policy_analysis.json` |
-| 情绪监控 | `${CODEX_DATA_DIR:-./codex-data}/skills/macro-research/sentiment_data.json` |
-
-**跨平台说明：**
-- 默认存储在用户主目录下的 `codex-data` 文件夹
-- 可通过环境变量 `CODEX_DATA_DIR` 自定义存储位置
-- Windows: `C:\Users\<用户名>\codex-data\`
-- macOS/Linux: `./codex-data/`
-
----
-
-## Important Notes
-
-- 美林时钟是理论模型，实际周期可能不典型
-- 政策干预可能改变周期运行
-- 全球化背景下需关注海外因素
-- 所有分析仅供参考，不构成投资建议
+建议写入 `${CODEX_DATA_DIR:-./codex-data}/macro-research/`。公开能力包不携带用户政策材料、行情快照或分析结果。

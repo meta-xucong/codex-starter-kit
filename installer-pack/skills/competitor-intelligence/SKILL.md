@@ -109,13 +109,14 @@ description: 竞品情报分析与对标研究。执行竞品功能矩阵对比�
 
 ## 数据来源
 
-> ⚠️ **所有网络搜索必须使用 `web-search-extraction` 技能**
+优先使用当前 Codex 会话提供的网页搜索/浏览能力，并为会变化的信息记录来源与日期。如果网页能力不可用，
+只使用用户提供的材料并标注证据缺口；不得把推测写成已核验事实。
 
-- 官网与产品体验（使用 `web-search-extraction` 访问官网）
-- 用户评价（使用 `web-search-extraction` 搜索 App Store、知乎、脉脉）
-- 行业报告与新闻（使用 `web-search-extraction` 获取）
-- 招聘动态（使用 `web-search-extraction` 搜索团队扩张信息）
-- 社交媒体与社区（使用 `web-search-extraction` 抓取）
+- 官网与公开产品资料
+- App Store、社区和公开用户评价
+- 行业报告与新闻
+- 公开招聘动态
+- 社交媒体与公开社区讨论
 
 ## 注意事项
 

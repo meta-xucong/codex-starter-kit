@@ -5,6 +5,14 @@ description: 微信公众号文章创作与封面策划，支持选题、结构�
 
 # WeChat Article Creator - 微信公众号创作技能
 
+## 脚本路径
+
+先把 `<skill-directory>` 解析为本 `SKILL.md` 所在目录。执行示例中的 `scripts/...` 时使用其绝对路径，
+不要假设当前工作目录是仓库根目录。
+
+草稿和封面默认写入当前项目的 `./codex-data/wechat-article-creator/`，不写入已安装 Skill。可用
+`WECHAT_ARTICLE_DATA_DIR` 指定本技能数据根目录，或用 `CODEX_DATA_DIR` 指定所有本地能力的数据根目录。
+
 ## 写作风格
 
 遵循**口语化、故事化、有观点写作风格**：
@@ -40,7 +48,7 @@ description: 微信公众号文章创作与封面策划，支持选题、结构�
 
 **关键**：标题要能激发好奇心或共鸣，而不是直接给出答案。
 
-收集完信息后，在 `drafts/` 目录创建策划文档：
+收集完信息后，在数据根目录的 `drafts/` 子目录创建策划文档：
 
 ```markdown
 # 文章计划
@@ -66,7 +74,7 @@ description: 微信公众号文章创作与封面策划，支持选题、结构�
 
 ### 2. 写作阶段（Writing）
 
-按照以下结构创作文章，保存为 `drafts/article_[主题].md`：
+按照以下结构创作文章，保存到数据根目录的 `drafts/` 子目录：
 
 #### 结构模板
 
@@ -228,19 +236,17 @@ description: 微信公众号文章创作与封面策划，支持选题、结构�
 #### 生成命令
 
 ```bash
-cd ./codex-data/workspace/skills/wechat-article
-
-# 基础生成
-python scripts/generate_cover.py \
+# 基础生成；执行时把 <skill-directory> 展开为绝对路径
+<python> "<skill-directory>/scripts/generate_cover.py" \
   --title "文章标题" \
   --subtitle "副标题（可选）" \
   --author "作者名" \
   --style modern
 
 # 使用自定义配色
-python scripts/generate_cover.py \
+<python> "<skill-directory>/scripts/generate_cover.py" \
   --title "文章标题" \
-  --colors primary="#FF6B6B" secondary="#4ECDC4" \
+  --colors '{"primary":"#FF6B6B","secondary":"#4ECDC4"}' \
   --style minimalist
 ```
 
@@ -251,7 +257,7 @@ python scripts/generate_cover.py \
 - `bold` - 大胆撞色风格
 - `tech` - 科技感风格
 
-封面图会保存到 `output/covers/` 目录。
+封面图默认保存到 `./codex-data/wechat-article-creator/covers/`；可用 `--output` 显式指定 `.jpg`、`.jpeg` 或 `.png` 文件。
 
 ---
 
@@ -260,19 +266,19 @@ python scripts/generate_cover.py \
 ### Step 1: 创建文章计划
 
 ```bash
-# 在 drafts/ 目录创建策划文档
+# 在项目数据目录的 drafts/ 子目录创建策划文档
 ```
 
-用户提出需求后，创建 `drafts/plan_[主题].md`
+用户提出需求后，创建 `./codex-data/wechat-article-creator/drafts/plan_[主题].md`
 
 ### Step 2: 按大纲写作
 
-根据策划内容，逐段写出文章，保存为 `drafts/article_[主题].md`
+根据策划内容逐段写作，并保存到同一 `drafts/` 子目录。
 
 ### Step 3: 生成封面
 
 ```bash
-python scripts/generate_cover.py \
+<python> "<skill-directory>/scripts/generate_cover.py" \
   --title "我为什么放弃了年薪 50W 的工作" \
   --author "Your Name" \
   --style modern
@@ -318,18 +324,14 @@ A: 先写烂，再改好。不要一开始就想写完美的东西。
 
 ---
 
-## 目录结构
+## 数据目录结构
 
 ```
-skills/wechat-article/
-├── SKILL.md              # 本文件
-├── scripts/
-│   └── generate_cover.py # 封面生成脚本
+codex-data/wechat-article-creator/
 ├── drafts/               # 草稿和策划文档
 │   ├── plan_*.md         # 文章策划
 │   └── article_*.md      # 文章正文
-└── output/
-    └── covers/           # 生成的封面图
+└── covers/               # 生成的封面图
 ```
 
 ---

@@ -21,9 +21,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACK = ROOT / "installer-pack"
 PACK_ID = "codex-starter"
-PACK_VERSION = "1.1.0"
+PACK_VERSION = "1.2.0"
 MIN_CODEX_VERSION = "0.144.0"
-TESTED_CODEX_VERSION = os.environ.get("CODEX_TESTED_VERSION", "0.144.1")
+TESTED_CODEX_VERSION = os.environ.get("CODEX_TESTED_VERSION", "0.147.0")
 STATUSES = {"ready", "requires-runtime", "requires-mcp", "requires-credential", "unsupported/disabled"}
 AFTER_STATUSES = {"core-ready", "auto-installable-runtime", "guided-config", "unsupported"}
 PACK_STATUSES = AFTER_STATUSES
@@ -91,6 +91,11 @@ def parse_toml(path: Path) -> dict[str, str]:
 
 
 def safe_copy_tree(source: Path, destination: Path) -> None:
+    for candidate in source.rglob("*"):
+        is_junction = getattr(candidate, "is_junction", lambda: False)
+        if candidate.is_symlink() or is_junction():
+            raise SystemExit(f"Refusing to copy a symbolic link or junction: {candidate}")
+
     def ignore(_directory: str, names: list[str]) -> set[str]:
         ignored = set()
         for name in names:
@@ -176,8 +181,19 @@ def build_dependencies(audit: dict, agents: dict) -> dict:
     for item in agents["agents"]:
         required = item.get("requiredSkills", item.get("skills", []))
         optional = item.get("optionalSkills", [])
+        blocked = item.get("blockedSkills", [])
         deps = [{"id":f"skill.{skill}","kind":"skill","name":skill,"required":True,"autoInstallable":True,"healthCheck":f"skills/{skill}/SKILL.md exists","dependentCapabilities":[item["description"]]} for skill in required]
         deps += [{"id":f"skill.{skill}","kind":"skill","name":skill,"required":False,"autoInstallable":True,"healthCheck":f"skills/{skill}/SKILL.md exists","dependentCapabilities":[item["description"]]} for skill in optional]
+        deps += [{"id":f"skill.{skill}","kind":"skill","name":skill,"required":False,"autoInstallable":False,"blocked":True,"healthCheck":"blocked pending explicit compatibility/license approval","dependentCapabilities":[item["description"]]} for skill in blocked]
+        for dependency in deps:
+            dependency_id = dependency["id"]
+            if dependency_id not in catalog:
+                catalog[dependency_id] = dict(dependency)
+                catalog[dependency_id]["dependentAgents"] = []
+            catalog[dependency_id].setdefault("dependentAgents", [])
+            if item["id"] not in catalog[dependency_id]["dependentAgents"]:
+                catalog[dependency_id]["dependentAgents"].append(item["id"])
+            catalog[dependency_id]["required"] = bool(catalog[dependency_id].get("required")) or bool(dependency.get("required"))
         for dependency_id in item.get("runtimeDependencies", []) + item.get("connectionDependencies", []):
             kind = "runtime" if str(dependency_id).startswith("runtime.") else "connection"
             dependency = {
@@ -201,6 +217,7 @@ def build_dependencies(audit: dict, agents: dict) -> dict:
         agent_items.append({
             "id": item["id"], "file": f"agents/{item['file']}", "name": item["name"], "description": item["description"],
             "status": item.get("status"), "readiness": item.get("readiness", {}), "requiredSkills": required, "optionalSkills": optional,
+            "blockedSkills": blocked,
             "connectionDependencies": item.get("connectionDependencies", []), "runtimeDependencies": item.get("runtimeDependencies", []),
             "dependencyTypes": sorted({dep.get("kind", "unknown") for dep in deps}), "dependencies": deps, "dependentCapabilities":[item["description"]]
         })
@@ -275,7 +292,7 @@ def validate_sources(skill_names: list[str], audit: dict, agents: dict) -> None:
             raise SystemExit(f"Duplicate agent name: {parsed['name']}")
         agent_names.add(parsed["name"])
         text = f"{parsed['description']}\n{parsed['developer_instructions']}"
-        declared = set(item.get("skills", [])) | set(item.get("requiredSkills", [])) | set(item.get("optionalSkills", []))
+        declared = set(item.get("skills", [])) | set(item.get("requiredSkills", [])) | set(item.get("optionalSkills", [])) | set(item.get("blockedSkills", []))
         for skill_id in re.findall(r"[a-z][a-z0-9]+(?:-[a-z0-9]+)+", text):
             if skill_id in known and skill_id not in declared:
                 raise SystemExit(f"Agent dependency catalog incomplete: {item['file']} -> {skill_id}")
@@ -284,6 +301,11 @@ def validate_sources(skill_names: list[str], audit: dict, agents: dict) -> None:
                 raise SystemExit(f"Agent references missing skill: {item['file']} -> {skill_id}")
         if set(item.get("requiredSkills", [])) & set(item.get("optionalSkills", [])):
             raise SystemExit(f"Agent required/optional overlap: {item['file']}")
+        if set(item.get("blockedSkills", [])) & (set(item.get("requiredSkills", [])) | set(item.get("optionalSkills", []))):
+            raise SystemExit(f"Agent blocked Skill overlaps an executable dependency: {item['file']}")
+        executable_skills = set(item.get("requiredSkills", [])) | set(item.get("optionalSkills", []))
+        if set(item.get("skills", [])) != executable_skills:
+            raise SystemExit(f"Agent skills must equal requiredSkills + optionalSkills: {item['file']}")
     forbidden_tokens = ["open" + "claw", "claw" + "dbot", "ran" + "claw"]
     forbidden = re.compile("|".join(re.escape(token) for token in forbidden_tokens), re.IGNORECASE)
     secret_like = re.compile(r"(?:sk-[A-Za-z0-9]{20,}|Bearer\\s+[A-Za-z0-9._-]{20,})")
@@ -313,9 +335,51 @@ def source_commit() -> str:
             check=True,
         )
         commit = result.stdout.strip()
-        return commit or "uncommitted-source"
+        if re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+            return commit.lower()
     except (OSError, subprocess.CalledProcessError):
-        return "uncommitted-source"
+        pass
+    lock = ROOT / "manifest" / "source-commit.txt"
+    if lock.is_file():
+        commit = lock.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+            return commit.lower()
+        raise SystemExit("manifest/source-commit.txt must contain one 40-character Git commit")
+    return "uncommitted-source"
+
+
+def source_commit_role() -> str:
+    return "git-head" if (ROOT / ".git").exists() else "upstream-base"
+
+
+def source_tree_sha256() -> str:
+    """Hash the editable source inputs independently from generated installer-pack/."""
+    roots = [
+        ROOT / "README.md",
+        ROOT / "ENVIRONMENT-MCP-INVENTORY.md",
+        ROOT / "agents",
+        ROOT / "config-fragments",
+        ROOT / "docs",
+        ROOT / "manifest",
+        ROOT / "runtime",
+        ROOT / "scripts",
+        ROOT / "skills",
+    ]
+    candidates: list[Path] = []
+    for root in roots:
+        if root.is_file():
+            candidates.append(root)
+        elif root.is_dir():
+            candidates.extend(path for path in root.rglob("*") if path.is_file())
+    digest = hashlib.sha256()
+    for path in sorted(candidates, key=lambda item: item.relative_to(ROOT).as_posix()):
+        relative = path.relative_to(ROOT).as_posix()
+        if any(part.casefold() in {name.casefold() for name in TRANSIENT_NAMES} for part in path.parts):
+            continue
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
 
 
 def checksum_lines() -> list[str]:
@@ -349,6 +413,7 @@ def build() -> dict:
     (PACK / "manifest").mkdir(parents=True)
     (PACK / "runtime").mkdir(parents=True)
     (PACK / "config-fragments").mkdir(parents=True)
+    (PACK / "docs").mkdir(parents=True)
     for agent in sorted((ROOT / "agents").glob("*.toml")):
         shutil.copy2(agent, PACK / "agents" / agent.name)
     for name in skill_names:
@@ -360,13 +425,23 @@ def build() -> dict:
     safe_copy_tree(ROOT / "config-fragments", PACK / "config-fragments")
     for runtime_script in ["materialize-python-wheelhouse.py", "materialize-python-wheelhouse.ps1"]:
         shutil.copy2(ROOT / "scripts" / runtime_script, PACK / "runtime" / runtime_script)
+    for source_name, destination in [
+        ("install-to-codex.ps1", PACK / "install-to-codex.ps1"),
+        ("render-codex-config.ps1", PACK / "render-codex-config.ps1"),
+        ("audit-codex-compatibility.py", PACK / "audit-codex-compatibility.py"),
+        ("test-adapter-contracts.py", PACK / "test-adapter-contracts.py"),
+        ("start-feishu-mcp.ps1", PACK / "mcp" / "start-feishu-mcp.ps1"),
+    ]:
+        shutil.copy2(ROOT / "scripts" / source_name, destination)
     for relative in ["README.md", "ENVIRONMENT-MCP-INVENTORY.md"]:
         shutil.copy2(ROOT / relative, PACK / relative)
+    for doc_name in ["CODEX-ADAPTATION-DEVELOPMENT.md", "KNOWN-LIMITATIONS.md"]:
+        shutil.copy2(ROOT / "docs" / doc_name, PACK / "docs" / doc_name)
     for relative in [
         "imported-skills.txt", "agents.txt", "agent-catalog.md", "source-notes.md",
         "skill-audit.json", "agent-audit.json", "runtime-artifacts.json",
         "mcp-servers.json", "api-services.json", "connection-fields.json",
-        "feishu-mcp-research.md",
+        "feishu-mcp-research.md", "feishu-tools.json",
     ]:
         shutil.copy2(ROOT / "manifest" / relative, PACK / "manifest" / relative)
     write_json(PACK / "mcp" / "mcp-servers.json", read_json(ROOT / "manifest" / "mcp-servers.json"))
@@ -376,7 +451,8 @@ def build() -> dict:
         "# External connection inventory\n\n"
         "`mcp-servers.json` describes MCP servers, while `api-services.json` describes direct HTTP/API services.\n"
         "`connection-fields.json` is the guided-configuration form contract. Real credentials and generated\n"
-        "Codex configuration stay outside this public pack.\n",
+        "Codex configuration stay outside this public pack. `start-feishu-mcp.ps1` is an offline-only,\n"
+        "redacting wrapper whose tool allowlist is locked by `../manifest/feishu-tools.json`.\n",
         encoding="utf-8", newline="\n"
     )
     for template in (ROOT / "manifest").glob("*.template.*"):
@@ -384,12 +460,15 @@ def build() -> dict:
     default_skills = [item["id"] for item in audit["skills"] if item.get("installByDefault")]
     default_agents = [f"agents/{item['file']}" for item in agents["agents"]]
     commit = source_commit()
+    tree_hash = source_tree_sha256()
     pack_manifest = {
         "schemaVersion": 2,
         "id": PACK_ID,
         "version": PACK_VERSION,
         "sourceCommit": commit,
-        "sourceDate": "2026-09-07",
+        "sourceCommitRole": source_commit_role(),
+        "sourceTreeSha256": tree_hash,
+        "sourceDate": "2026-09-08",
         "compatibleCodex": {
             "minCodexVersion": MIN_CODEX_VERSION,
             "testedCodexVersion": TESTED_CODEX_VERSION,
@@ -424,7 +503,11 @@ def build() -> dict:
         "runtimeArtifacts": "manifest/runtime-artifacts.json",
         "mcpServers": "mcp/mcp-servers.json",
         "apiServices": "mcp/api-services.json",
-        "connectionFields": "mcp/connection-fields.json"
+        "connectionFields": "mcp/connection-fields.json",
+        "compatibilityAudit": "audit-codex-compatibility.py",
+        "adapterContractTests": "test-adapter-contracts.py",
+        "configRenderer": "render-codex-config.ps1",
+        "installer": "install-to-codex.ps1",
     }
     write_json(PACK / "pack.json", pack_manifest)
     write_json(PACK / "dependencies.json", build_dependencies(audit, agents))
@@ -435,7 +518,7 @@ def build() -> dict:
         manifest.append({"path":relative,"sha256":digest,"bytes":path.stat().st_size,"owned":True})
     write_json(PACK / "file-manifest.json", {"schemaVersion":2,"id":PACK_ID,"version":PACK_VERSION,"hashScope":"all pack files except file-manifest.json and checksums.sha256","files":manifest})
     (PACK / "checksums.sha256").write_text("\n".join(checksum_lines()) + "\n", encoding="utf-8", newline="\n")
-    return {"skills":len(skill_names),"agents":len(default_agents),"defaultSkills":len(default_skills),"files":len(pack_files()),"sourceCommit":commit}
+    return {"skills":len(skill_names),"agents":len(default_agents),"defaultSkills":len(default_skills),"files":len(pack_files()),"sourceCommit":commit,"sourceTreeSha256":tree_hash}
 
 
 def main() -> None:

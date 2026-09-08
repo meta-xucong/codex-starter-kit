@@ -7,10 +7,11 @@ Manages user reflection profiles, daily reflections, habit tracking, and goals.
 
 import json
 import os
+import re
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 DB_DIR = Path(os.environ.get("CODEX_DATA_DIR", Path.cwd() / "codex-data")) / "daily_reflection"
 PROFILE_FILE = DB_DIR / "profile.json"
@@ -509,17 +510,26 @@ def generate_monthly_review(year: int = None, month: int = None) -> Dict[str, An
 
 
 def extract_themes(reflections: List[Dict]) -> List[str]:
-    """Extract common themes from reflections."""
-    # Simple keyword extraction (can be enhanced with NLP)
-    all_text = ""
-    for r in reflections:
-        all_text += " ".join(r.get("wins", []))
-        all_text += " ".join(r.get("learnings", []))
-        all_text += " ".join(r.get("gratitude", []))
-        all_text += r.get("free_notes", "")
-    
-    # Return empty for now (placeholder for theme extraction)
-    return []
+    """Extract up to five recurring, human-entered phrases deterministically."""
+    phrases: List[str] = []
+    for reflection in reflections:
+        for field in ("wins", "learnings", "gratitude"):
+            values = reflection.get(field, [])
+            if isinstance(values, str):
+                values = [values]
+            if isinstance(values, list):
+                phrases.extend(str(value) for value in values)
+        free_notes = reflection.get("free_notes", "")
+        if isinstance(free_notes, str):
+            phrases.extend(re.split(r"[。！？!?；;\n]+", free_notes))
+
+    normalized = []
+    for phrase in phrases:
+        value = re.sub(r"\s+", " ", phrase).strip(" \t\r\n，,。.；;：:!?！？-_*")
+        if len(value) >= 2:
+            normalized.append(value[:80])
+    counts = Counter(normalized)
+    return [phrase for phrase, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:5]]
 
 
 # ============================================================================

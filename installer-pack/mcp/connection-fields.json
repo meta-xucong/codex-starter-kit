@@ -12,7 +12,7 @@
       "validation": {
         "regex": "^cli_[A-Za-z0-9_-]+$"
       },
-      "help": "从飞书开放平台自建应用复制 App ID；只保存在本机连接配置。",
+      "help": "从飞书开放平台自建应用复制，并在启动 Codex 的同一进程环境中设置 FEISHU_APP_ID。",
       "capabilities": [
         "mcp.feishu"
       ]
@@ -28,7 +28,7 @@
       "validation": {
         "minLength": 8
       },
-      "help": "不要写入仓库、日志或安装记录。",
+      "help": "通过进程环境变量 FEISHU_APP_SECRET 注入；不要写入仓库、config.toml、日志或安装记录。",
       "capabilities": [
         "mcp.feishu"
       ]
@@ -68,7 +68,7 @@
           "oauth"
         ]
       },
-      "help": "按实际权限选择；用户级读写需在飞书应用侧完成 OAuth/权限配置。",
+      "help": "按实际权限选择；user 模式还需 FEISHU_USER_ACCESS_TOKEN，OAuth 模式由官方 CLI 发起授权。文档正文目前只读。",
       "capabilities": [
         "mcp.feishu"
       ]
@@ -99,9 +99,25 @@
       "defaultUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "validation": {
         "scheme": "https",
-        "pathSuffix": "/compatible-mode/v1"
+        "path": "/compatible-mode/v1"
       },
-      "help": "兼容 OpenAI chat/completions 的服务地址。",
+      "help": "只填写 compatible-mode/v1 根地址；脚本会自行拼接 /chat/completions。",
+      "capabilities": [
+        "api.dashscope-web-search"
+      ]
+    },
+    {
+      "id": "dashscope.model",
+      "serviceId": "dashscope-web-search",
+      "label": "DashScope 搜索模型",
+      "type": "text",
+      "required": true,
+      "secret": false,
+      "defaultUrl": "",
+      "validation": {
+        "minLength": 1
+      },
+      "help": "设置 DASHSCOPE_MODEL；必须使用服务当前支持且启用联网搜索的模型，不沿用仓库猜测值。",
       "capabilities": [
         "api.dashscope-web-search"
       ]
@@ -155,6 +171,23 @@
       ]
     },
     {
+      "id": "image-2.agent-id",
+      "serviceId": "image-2",
+      "label": "图像网关路由 ID",
+      "type": "text",
+      "required": true,
+      "secret": false,
+      "defaultUrl": "",
+      "validation": {
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "help": "设置 IMAGE_2_AGENT_ID；这是自定义网关要求的路由标识，不是 Codex 官方任务 ID，禁止猜测。",
+      "capabilities": [
+        "api.image-2"
+      ]
+    },
+    {
       "id": "seedance.api-key",
       "serviceId": "seedance",
       "label": "视频服务 API Key",
@@ -198,6 +231,71 @@
         "minLength": 1
       },
       "help": "必须与视频服务端点支持的模型一致；没有模型名时不提交计费任务。",
+      "capabilities": [
+        "api.seedance"
+      ]
+    },
+    {
+      "id": "seedance.agent-id",
+      "serviceId": "seedance",
+      "label": "视频网关路由 ID",
+      "type": "text",
+      "required": true,
+      "secret": false,
+      "defaultUrl": "",
+      "validation": {
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "help": "设置 SEEDANCE_AGENT_ID；这是自定义网关要求的路由标识，不是 Codex 官方任务 ID，禁止猜测。",
+      "capabilities": [
+        "api.seedance"
+      ]
+    },
+    {
+      "id": "seedance.precharge-points",
+      "serviceId": "seedance",
+      "label": "视频预扣积分",
+      "type": "text",
+      "required": true,
+      "secret": false,
+      "defaultUrl": "",
+      "validation": {
+        "regex": "^[1-9][0-9]*$"
+      },
+      "help": "设置 SEEDANCE_PRECHARGE_POINTS；只填写服务方当前书面确认的正整数，不沿用示例值。",
+      "capabilities": [
+        "api.seedance"
+      ]
+    },
+    {
+      "id": "seedance.official-link-ttl-hours",
+      "serviceId": "seedance",
+      "label": "官方链接有效小时数",
+      "type": "text",
+      "required": true,
+      "secret": false,
+      "defaultUrl": "",
+      "validation": {
+        "regex": "^[1-9][0-9]*$"
+      },
+      "help": "设置 SEEDANCE_OFFICIAL_LINK_TTL_HOURS；必须来自服务方当前策略。",
+      "capabilities": [
+        "api.seedance"
+      ]
+    },
+    {
+      "id": "seedance.refund-rule",
+      "serviceId": "seedance",
+      "label": "视频费用返还规则",
+      "type": "text",
+      "required": true,
+      "secret": false,
+      "defaultUrl": "",
+      "validation": {
+        "minLength": 1
+      },
+      "help": "设置 SEEDANCE_REFUND_RULE；在提交前原样展示给用户，不自行概括或猜测。",
       "capabilities": [
         "api.seedance"
       ]

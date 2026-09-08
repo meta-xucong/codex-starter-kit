@@ -1,7 +1,6 @@
 ---
 name: market-sizing-analysis
 description: This skill should be used when the user asks to "calculate TAM", "determine SAM", "estimate SOM", "size the market", "calculate market opportunity", "what's the total addressable market", or requests market sizing analysis for a startup or business opportunity.
-version: 1.0.0
 ---
 
 # Market Sizing Analysis
@@ -164,24 +163,25 @@ Clearly specify what market is being measured.
 
 ### Step 2: Gather Data Sources
 
-> ⚠️ **所有网络搜索必须使用 `web-search-extraction` 技能**
+Use the current Codex session's native web search/browser when available. Open primary sources, capture publication dates and units,
+and keep assumptions separate from observed data. If web access is unavailable, use only user-provided sources and state the verification gap.
 
 Identify credible data for calculations.
 
 **Top-Down Sources:**
 
-- Industry research reports (Gartner, Forrester, IDC) - 使用 `web-search-extraction` 获取
-- Government statistics (Census, BLS, trade associations) - 使用 `web-search-extraction` 获取
-- Public company filings and earnings - 使用 `web-search-extraction` 获取
-- Market research firms (Statista, CB Insights, PitchBook) - 使用 `web-search-extraction` 获取
+- Industry research reports (Gartner, Forrester, IDC), subject to access rights
+- Government statistics (Census, BLS, trade associations)
+- Public company filings and earnings
+- Market research firms (Statista, CB Insights, PitchBook), subject to access rights
 
 **Bottom-Up Sources:**
 
 - Customer interviews and surveys
 - Sales data and CRM records
-- Industry databases (LinkedIn, ZoomInfo, Crunchbase) - 使用 `web-search-extraction` 获取
-- Competitive intelligence - 使用 `web-search-extraction` 获取
-- Academic research - 使用 `web-search-extraction` 获取
+- Industry databases (LinkedIn, ZoomInfo, Crunchbase), subject to access rights
+- Competitive intelligence
+- Academic research
 
 **Value Theory Sources:**
 

@@ -5,6 +5,11 @@ description: 智能健身私教，提供个性化训练计划、动作指导、�
 
 # Fitness Coach - 智能健身私教
 
+## 脚本路径
+
+先把 `<skill-directory>` 解析为本 `SKILL.md` 所在目录。执行示例中的 `scripts/...` 时使用其绝对路径，
+不要假设当前工作目录是仓库根目录。
+
 ## Overview
 
 这位技能将 AI 打造成你的专属健身私教，不仅制定科学训练计划，还提供动作指导、进度追踪和周期化训练管理。融合 "教练" 的个性化指导和 "计划设计师" 的科学周期规划。
@@ -385,7 +390,7 @@ Codex: [创建档案，生成计划]
 ## Technical Notes
 
 **Data Storage:**
-数据存储在用户主目录下的 `codex-data/fitness_coach/` 文件夹中：
+数据默认存储在当前项目的 `codex-data/fitness_coach/` 文件夹中；可用 `CODEX_DATA_DIR` 改写数据根目录：
 - Profile: `profile.json`
 - Programs: `programs.json`
 - Workouts: `workouts.json`

@@ -445,7 +445,7 @@ if __name__ == "__main__":
     if args.output:
         with open(args.output, 'w') as f:
             json.dump(plan, f, indent=2)
-        print(f"✓ Meal plan generated: {args.output}")
+        print(f"Meal plan generated: {args.output}")
         print(f"  Plan ID: {plan_id}")
     else:
         print(json.dumps(plan, indent=2))

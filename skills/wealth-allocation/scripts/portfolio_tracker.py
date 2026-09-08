@@ -3,381 +3,197 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""
-组合收益追踪器
+"""Attributed portfolio performance arithmetic without embedded advice."""
 
-追踪投资组合的收益表现
-
-Usage:
-    python portfolio_tracker.py --portfolio portfolio.json --history history.json
-    python portfolio_tracker.py --initial 100000 --current 115000 --months 12
-"""
+from __future__ import annotations
 
 import argparse
 import json
 import math
-from datetime import datetime, timedelta
-from typing import Dict, List
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+MAX_INPUT_BYTES = 5 * 1024 * 1024
 
 
 def calculate_annualized_return(initial: float, current: float, years: float) -> float:
-    """计算年化收益率"""
-    if initial <= 0 or years <= 0:
-        return 0.0
+    if initial <= 0 or current <= 0 or years <= 0:
+        raise ValueError("年化收益计算要求正的初值、终值和期间。")
     return (pow(current / initial, 1 / years) - 1) * 100
 
 
-def calculate_max_drawdown(values: List[float]) -> float:
-    """计算最大回撤"""
-    if not values or len(values) < 2:
-        return 0.0
-    
+def calculate_max_drawdown(values: list[float]) -> float:
     peak = values[0]
-    max_dd = 0.0
-    
+    maximum = 0.0
     for value in values:
-        if value > peak:
-            peak = value
-        dd = (peak - value) / peak * 100
-        if dd > max_dd:
-            max_dd = dd
-    
-    return max_dd
+        peak = max(peak, value)
+        maximum = max(maximum, (peak - value) / peak * 100)
+    return maximum
 
 
-def calculate_volatility(returns: List[float]) -> float:
-    """计算波动率（年化）"""
-    if not returns or len(returns) < 2:
-        return 0.0
-    
-    mean = sum(returns) / len(returns)
-    variance = sum((r - mean) ** 2 for r in returns) / len(returns)
-    std = math.sqrt(variance)
-    
-    # 假设月度数据，年化 = 月波动 * sqrt(12)
-    return std * math.sqrt(12)
+def calculate_volatility(monthly_returns_percent: list[float]) -> float | None:
+    if len(monthly_returns_percent) < 2:
+        return None
+    mean = sum(monthly_returns_percent) / len(monthly_returns_percent)
+    population_variance = sum((value - mean) ** 2 for value in monthly_returns_percent) / len(
+        monthly_returns_percent
+    )
+    return math.sqrt(population_variance) * math.sqrt(12)
 
 
-def calculate_sharpe_ratio(annual_return: float, volatility: float, risk_free_rate: float = 2.5) -> float:
-    """计算夏普比率"""
-    if volatility == 0:
-        return 0.0
-    return (annual_return - risk_free_rate) / volatility
-
-
-def calculate_calmar_ratio(annual_return: float, max_drawdown: float) -> float:
-    """计算卡玛比率"""
-    if max_drawdown == 0:
-        return 0.0
-    return annual_return / max_drawdown
+def _finite(value: Any, field: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} 必须是有限数值。")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} 必须是有限数值。") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field} 必须是有限数值。")
+    return number
 
 
 def track_portfolio(
     initial_value: float,
     current_value: float,
-    history: List[Dict] = None,
-    months: int = 12
-) -> Dict:
-    """追踪组合表现"""
-    
+    history: list[dict[str, Any]],
+    months: int,
+    risk_free_rate: float,
+    benchmarks: dict[str, float],
+    data_as_of: str,
+    sources: list[str],
+) -> dict[str, Any]:
+    initial_value = _finite(initial_value, "initial_value")
+    current_value = _finite(current_value, "current_value")
+    risk_free_rate = _finite(risk_free_rate, "risk_free_rate")
+    if initial_value <= 0 or current_value <= 0:
+        raise ValueError("initial_value 和 current_value 必须为正。")
+    if not isinstance(months, int) or not 1 <= months <= 1200:
+        raise ValueError("months 必须是 1–1200 的整数。")
+    if risk_free_rate <= -100:
+        raise ValueError("risk_free_rate 必须大于 -100%。")
+    if not str(data_as_of or "").strip():
+        raise ValueError("缺少 data_as_of。")
+    normalized_sources = [str(item).strip() for item in sources or [] if str(item).strip()]
+    if not normalized_sources:
+        raise ValueError("sources 必须至少包含一个非空来源说明或 URL。")
+    if not isinstance(history, list) or len(history) != months + 1:
+        raise ValueError("按月 history 必须恰好包含 months + 1 个净值点。")
+
+    values = []
+    for index, item in enumerate(history):
+        if not isinstance(item, dict) or "value" not in item:
+            raise ValueError(f"history[{index}] 必须包含 value。")
+        value = _finite(item["value"], f"history[{index}].value")
+        if value <= 0:
+            raise ValueError(f"history[{index}].value 必须为正。")
+        values.append(value)
+    if not math.isclose(values[0], initial_value, rel_tol=1e-9, abs_tol=1e-9):
+        raise ValueError("history 首值必须与 initial_value 一致。")
+    if not math.isclose(values[-1], current_value, rel_tol=1e-9, abs_tol=1e-9):
+        raise ValueError("history 末值必须与 current_value 一致。")
+
+    if not isinstance(benchmarks, dict):
+        raise ValueError("benchmarks 必须是名称到同期年化收益率的对象。")
+    normalized_benchmarks = {}
+    for raw_name, raw_return in benchmarks.items():
+        name = str(raw_name).strip()
+        if not name:
+            raise ValueError("benchmarks 包含空名称。")
+        normalized_benchmarks[name] = _finite(raw_return, f"benchmarks.{name}")
+
+    monthly_returns = [(values[index] / values[index - 1] - 1) * 100 for index in range(1, len(values))]
     years = months / 12
-    profit = current_value - initial_value
-    profit_pct = (profit / initial_value) * 100 if initial_value > 0 else 0
-    
-    # 基础指标
-    annual_return = calculate_annualized_return(initial_value, current_value, years)
-    
-    # 如果有历史数据，计算更详细的指标
-    max_drawdown = 0
-    volatility = 0
-    sharpe = 0
-    calmar = 0
-    
-    if history and len(history) > 1:
-        values = [h["value"] for h in history]
-        returns = []
-        for i in range(1, len(history)):
-            monthly_return = (history[i]["value"] - history[i-1]["value"]) / history[i-1]["value"] * 100
-            returns.append(monthly_return)
-        
-        max_drawdown = calculate_max_drawdown(values)
-        volatility = calculate_volatility(returns)
-        sharpe = calculate_sharpe_ratio(annual_return, volatility)
-        calmar = calculate_calmar_ratio(annual_return, max_drawdown)
-    
-    # 评级
-    rating = calculate_rating(annual_return, max_drawdown, sharpe)
-    
-    return {
-        "tracked_at": datetime.now().isoformat(),
-        "period_months": months,
-        "basic_metrics": {
-            "initial_value": initial_value,
-            "current_value": current_value,
-            "profit": round(profit, 2),
-            "profit_percentage": round(profit_pct, 2),
-            "annualized_return": round(annual_return, 2)
-        },
-        "risk_metrics": {
-            "max_drawdown": round(max_drawdown, 2),
-            "volatility": round(volatility, 2),
-            "sharpe_ratio": round(sharpe, 2),
-            "calmar_ratio": round(calmar, 2)
-        },
-        "rating": rating,
-        "benchmark_comparison": compare_with_benchmark(annual_return),
-        "analysis": generate_analysis(annual_return, max_drawdown, sharpe, profit_pct),
-        "suggestions": generate_suggestions(annual_return, max_drawdown, sharpe)
-    }
-
-
-def calculate_rating(annual_return: float, max_drawdown: float, sharpe: float) -> Dict:
-    """计算综合评级"""
-    score = 0
-    
-    # 收益评分（40分）
-    if annual_return > 15:
-        score += 40
-    elif annual_return > 10:
-        score += 30
-    elif annual_return > 5:
-        score += 20
-    elif annual_return > 0:
-        score += 10
-    
-    # 风险控制评分（30分）
-    if max_drawdown < 10:
-        score += 30
-    elif max_drawdown < 20:
-        score += 20
-    elif max_drawdown < 30:
-        score += 10
-    
-    # 夏普比率评分（30分）
-    if sharpe > 1.0:
-        score += 30
-    elif sharpe > 0.5:
-        score += 20
-    elif sharpe > 0:
-        score += 10
-    
-    # 评级
-    if score >= 80:
-        level = "优秀"
-    elif score >= 60:
-        level = "良好"
-    elif score >= 40:
-        level = "一般"
-    else:
-        level = "需改进"
-    
-    return {
-        "score": score,
-        "level": level,
-        "max_score": 100
-    }
-
-
-def compare_with_benchmark(annual_return: float) -> Dict:
-    """与基准比较"""
-    benchmarks = {
-        "沪深300": 8.0,  # 假设历史平均
-        "中证500": 10.0,
-        "货币基金": 2.5,
-        "债券基金": 4.0
-    }
-    
-    comparison = {}
-    for name, benchmark_return in benchmarks.items():
-        diff = annual_return - benchmark_return
-        comparison[name] = {
-            "benchmark_return": benchmark_return,
-            "diff": round(diff, 2),
-            "outperform": diff > 0
+    annualized_return = calculate_annualized_return(initial_value, current_value, years)
+    volatility = calculate_volatility(monthly_returns)
+    maximum_drawdown = calculate_max_drawdown(values)
+    sharpe = None if volatility in (None, 0) else (annualized_return - risk_free_rate) / volatility
+    calmar = None if maximum_drawdown == 0 else annualized_return / maximum_drawdown
+    comparisons = {
+        name: {
+            "benchmark_return": value,
+            "portfolio_annualized_return": round(annualized_return, 4),
+            "difference_percentage_points": round(annualized_return - value, 4),
         }
-    
-    return comparison
-
-
-def generate_analysis(annual_return: float, max_drawdown: float, sharpe: float, profit_pct: float) -> Dict:
-    """生成分析结论"""
-    analysis = {
-        "return_comment": "",
-        "risk_comment": "",
-        "efficiency_comment": "",
-        "overall_comment": ""
+        for name, value in normalized_benchmarks.items()
     }
-    
-    # 收益分析
-    if annual_return > 15:
-        analysis["return_comment"] = "收益表现优秀，超越大部分投资者"
-    elif annual_return > 8:
-        analysis["return_comment"] = "收益表现良好，达到预期目标"
-    elif annual_return > 0:
-        analysis["return_comment"] = "收益表现一般，刚跑赢通胀"
-    else:
-        analysis["return_comment"] = "收益为负，需审视投资策略"
-    
-    # 风险分析
-    if max_drawdown < 10:
-        analysis["risk_comment"] = "风险控制优秀，回撤很小"
-    elif max_drawdown < 20:
-        analysis["risk_comment"] = "风险控制良好，回撤在可接受范围"
-    elif max_drawdown < 30:
-        analysis["risk_comment"] = "风险偏高，需加强风控"
-    else:
-        analysis["risk_comment"] = "风险过高，需立即调整"
-    
-    # 效率分析
-    if sharpe > 1.0:
-        analysis["efficiency_comment"] = "风险调整后收益优秀，投资效率高"
-    elif sharpe > 0.5:
-        analysis["efficiency_comment"] = "风险调整后收益良好"
-    elif sharpe > 0:
-        analysis["efficiency_comment"] = "风险调整后收益一般"
-    else:
-        analysis["efficiency_comment"] = "承担风险但未获得相应收益"
-    
-    # 综合评价
-    if annual_return > 10 and max_drawdown < 20:
-        analysis["overall_comment"] = "组合表现优秀，建议继续保持"
-    elif annual_return > 5 and max_drawdown < 25:
-        analysis["overall_comment"] = "组合表现良好，可小幅优化"
-    else:
-        analysis["overall_comment"] = "组合需要调整，建议重新审视配置"
-    
-    return analysis
+    return {
+        "calculated_at": datetime.now(timezone.utc).isoformat(),
+        "data_as_of": str(data_as_of).strip(),
+        "sources": normalized_sources,
+        "period_months": months,
+        "initial_value": initial_value,
+        "current_value": current_value,
+        "total_return_percent": round((current_value / initial_value - 1) * 100, 4),
+        "annualized_return_percent": round(annualized_return, 4),
+        "annualized_population_volatility_percent": None if volatility is None else round(volatility, 4),
+        "max_drawdown_percent": round(maximum_drawdown, 4),
+        "risk_free_rate": risk_free_rate,
+        "sharpe_ratio": None if sharpe is None else round(sharpe, 4),
+        "calmar_ratio": None if calmar is None else round(calmar, 4),
+        "monthly_returns_percent": [round(value, 4) for value in monthly_returns],
+        "benchmark_comparison": comparisons,
+        "methodology": (
+            "假设 history 是无期间申赎的月末净值序列；波动率使用月收益总体标准差 × sqrt(12)。"
+            "脚本不内置基准收益、评分、调仓、止盈或止损建议。"
+        ),
+    }
 
 
-def generate_suggestions(annual_return: float, max_drawdown: float, sharpe: float) -> List[str]:
-    """生成建议"""
-    suggestions = []
-    
-    if annual_return < 5:
-        suggestions.append("收益偏低，考虑增加权益类资产配置")
-    if max_drawdown > 25:
-        suggestions.append("回撤过大，建议增加债券或货币基金降低波动")
-    if sharpe < 0.5:
-        suggestions.append("夏普比率偏低，优化基金选择或调整配置比例")
-    
-    suggestions.append("定期（每月）记录组合净值，追踪长期表现")
-    suggestions.append("与基准指数对比，评估主动管理能力")
-    suggestions.append("关注最大回撤修复时间，评估组合韧性")
-    
-    return suggestions
+def _load_json(path_value: str, label: str) -> Any:
+    path = Path(path_value).expanduser().resolve()
+    if not path.is_file() or path.stat().st_size > MAX_INPUT_BYTES:
+        raise ValueError(f"{label}不存在或超过 5 MiB。")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def format_report(report: Dict) -> str:
-    """格式化追踪报告（投资官六段式）"""
-    b = report["basic_metrics"]
-    r = report["risk_metrics"]
-    a = report["analysis"]
-    
-    lines = [
-        "=" * 60,
-        "组合收益追踪报告",
-        "=" * 60,
-        "",
-        "## 🧭 投资官视角",
-        "",
-        "### 一、核心结论",
-        f"【评级】{report['rating']['level']}（{report['rating']['score']}/{report['rating']['max_score']}分）",
-        f"【总收益】{b['profit']:,.0f} 元（{b['profit_percentage']:+.2f}%）",
-        f"【年化收益】{b['annualized_return']:.2f}%",
-        f"【最大回撤】{r['max_drawdown']:.2f}%",
-        f"【夏普比率】{r['sharpe_ratio']:.2f}",
-        "",
-        "### 二、背后逻辑",
-        f"• {a['return_comment']}",
-        f"• {a['risk_comment']}",
-        f"• {a['efficiency_comment']}",
-        "",
-        "【与基准对比】",
-    ]
-    
-    for name, comp in report["benchmark_comparison"].items():
-        symbol = "+" if comp["outperform"] else ""
-        lines.append(f"• {name}: {comp['benchmark_return']:.1f}% ({symbol}{comp['diff']:+.1f}%)")
-    
-    lines.extend([
-        "",
-        "### 三、风险在哪里",
-    ])
-    
-    if r["max_drawdown"] > 20:
-        lines.append(f"⚠️ 最大回撤{r['max_drawdown']:.1f}%偏高，需关注风险控制")
-    if r["volatility"] > 20:
-        lines.append(f"⚠️ 波动率{r['volatility']:.1f}%较高，组合不够稳定")
-    if r["sharpe_ratio"] < 0.3:
-        lines.append(f"⚠️ 夏普比率{r['sharpe_ratio']:.2f}偏低，风险收益比不佳")
-    
-    if r["max_drawdown"] <= 20 and r["volatility"] <= 20 and r["sharpe_ratio"] >= 0.3:
-        lines.append("✓ 风险指标在可控范围内")
-    
-    lines.extend([
-        "",
-        "### 四、适合谁",
-        "• 已持有组合3个月以上、希望了解真实收益的投资者",
-        "• 有明确收益目标、需要定期检视的投资者",
-        "• 希望与基准对比、评估投资能力的投资者",
-        "",
-        "### 五、操作策略",
-    ])
-    
-    for suggestion in report["suggestions"]:
-        lines.append(f"✓ {suggestion}")
-    
-    lines.extend([
-        "",
-        "### 六、如果判断错了",
-        "• 如短期收益不佳但长期逻辑未变，保持耐心，避免频繁调仓",
-        "• 如连续6个月跑输基准，需重新审视投资策略",
-        "• 如最大回撤超过心理承受范围，及时降低仓位",
-        "• 建议设置'止损线'（如-20%）和'止盈线'（如+30%）",
-        "",
-        "=" * 60,
-        f"追踪时间：{report['tracked_at']}",
-        f"统计周期：{report['period_months']}个月",
-        "=" * 60
-    ])
-    
-    return "\n".join(lines)
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="组合历史表现透明计算器")
+    parser.add_argument("--initial", type=float, required=True, help="期初组合价值")
+    parser.add_argument("--current", type=float, required=True, help="期末组合价值")
+    parser.add_argument("--history", required=True, help="按月历史净值 JSON 数组")
+    parser.add_argument("--months", type=int, required=True, help="区间月数")
+    parser.add_argument("--risk-free-rate", type=float, required=True, help="同期年化无风险利率（%）")
+    parser.add_argument("--benchmarks", help="可选：已核验的同期基准年化收益率 JSON 对象")
+    parser.add_argument("--as-of", required=True, help="数据时点")
+    parser.add_argument("--source", action="append", required=True, help="数据来源说明或 URL，可多次使用")
+    parser.add_argument("--output", help="输出 JSON 文件")
+    parser.add_argument("--json", action="store_true", help="输出 JSON")
+    return parser
 
 
-def main():
-    parser = argparse.ArgumentParser(description="组合收益追踪器")
-    parser.add_argument("--initial", type=float, required=True,
-                       help="初始投资金额（元）")
-    parser.add_argument("--current", type=float, required=True,
-                       help="当前组合价值（元）")
-    parser.add_argument("--history", type=str, help="历史净值JSON文件")
-    parser.add_argument("--months", type=int, default=12,
-                       help="投资时长（月）")
-    parser.add_argument("--output", type=str, help="输出JSON文件")
-    parser.add_argument("--json", action="store_true", help="JSON格式输出")
-    
-    args = parser.parse_args()
-    
-    # 加载历史数据
-    history = None
-    if args.history:
-        with open(args.history, 'r', encoding='utf-8') as f:
-            history = json.load(f)
-    
-    # 追踪组合
-    report = track_portfolio(args.initial, args.current, history, args.months)
-    
-    if args.json or args.output:
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        history = _load_json(args.history, "history JSON")
+        benchmarks = _load_json(args.benchmarks, "benchmarks JSON") if args.benchmarks else {}
+        report = track_portfolio(
+            args.initial,
+            args.current,
+            history,
+            args.months,
+            args.risk_free_rate,
+            benchmarks,
+            args.as_of,
+            args.source,
+        )
         output = json.dumps(report, ensure_ascii=False, indent=2)
         if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(output)
-            print(f"报告已保存到: {args.output}")
+            output_path = Path(args.output).expanduser().resolve()
+            output_path.write_text(output + "\n", encoding="utf-8")
+            print(f"追踪报告已保存到: {output_path}")
         else:
             print(output)
-    else:
-        print(format_report(report))
+        return 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        payload = json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)
+        print(payload if args.json else f"追踪计算失败：{exc}", file=sys.stdout if args.json else sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
