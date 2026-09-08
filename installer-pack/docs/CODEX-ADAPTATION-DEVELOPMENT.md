@@ -284,7 +284,7 @@ Image-2 与 Seedance 是直连 HTTP 适配器，不是 MCP，也不是 Codex 原
 
 ## 9. 最终实施结果（2026-09-08）
 
-- 50 个 Skill、7 个 Agent、25 个非核心 `agents/openai.yaml`、25 个飞书 allowlist 工具和 18 个连接字段通过源树审计。
+- 50 个 Skill、7 个 Agent、25 个非核心 `agents/openai.yaml`、25 个飞书 allowlist 工具和 19 个连接字段通过源树审计。
 - 整改后状态为：25 个 `core-ready`、14 个 `auto-installable-runtime`、7 个 `guided-config`、4 个 `unsupported`；默认只安装 25 个核心 Skill。
 - 34 个离线契约回归在源树和生成包各执行一次并通过；覆盖 DashScope、Image-2、Seedance、金融数据真实性、占位实现和本地写入边界。
 - 50 个 Skill 使用 Skill Creator 的 `quick_validate.py` 在 Python UTF-8 模式下逐个通过。

@@ -4,11 +4,18 @@ param(
     [switch]$IncludeUnsupported,
     [switch]$Overwrite,
     [string]$PackRoot,
-    [string]$TargetUserProfile
+    [string]$TargetUserProfile,
+    [ValidateSet('tenant','oauth','user')][string]$FeishuAuthMode = 'tenant',
+    [string]$FeishuDomain = 'https://open.feishu.cn',
+    [string[]]$EnableSkills = @(),
+    [string[]]$EnabledApiServices = @(),
+    [switch]$EnableFeishu,
+    [switch]$DisableFeishu
 )
 
 $ErrorActionPreference = 'Stop'
 if ($IncludeUnsupported -and -not $IncludeNonDefault) { throw '-IncludeUnsupported requires -IncludeNonDefault.' }
+if ($EnableFeishu -and $DisableFeishu) { throw '-EnableFeishu and -DisableFeishu are mutually exclusive.' }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($PackRoot)) {
@@ -340,16 +347,22 @@ $rendererTarget = Join-Path $ownershipRoot 'bin\render-codex-config.ps1'
 $generatedConfig = Join-Path $ownershipRoot 'config\codex-starter.generated.toml'
 $feishuAppId = [Environment]::GetEnvironmentVariable('FEISHU_APP_ID', 'Process')
 $feishuAppSecret = [Environment]::GetEnvironmentVariable('FEISHU_APP_SECRET', 'Process')
-$feishuEnabled = (-not [string]::IsNullOrWhiteSpace($feishuAppId) -and $feishuAppId -match '^cli_[A-Za-z0-9_-]+$' -and -not [string]::IsNullOrWhiteSpace($feishuAppSecret) -and $feishuAppSecret.Length -ge 8)
+$feishuEnabled = if ($DisableFeishu) { $false } elseif ($EnableFeishu) { $true } else { (-not [string]::IsNullOrWhiteSpace($feishuAppId) -and $feishuAppId -match '^cli_[A-Za-z0-9_-]+$' -and -not [string]::IsNullOrWhiteSpace($feishuAppSecret) -and $feishuAppSecret.Length -ge 8) }
 $renderArguments = @(
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PackRoot 'render-codex-config.ps1'),
     '-OutputPath', $generatedConfig,
     '-SkillRoot', $skillTarget,
     '-FeishuWrapperPath', $wrapperTarget,
     '-FeishuPackageCache', ([string]$runtimeState.feishu.packageRoot),
+    '-FeishuAuthMode', $FeishuAuthMode,
+    '-FeishuDomain', $FeishuDomain,
     '-Overwrite'
 )
 if ($feishuEnabled) { $renderArguments += '-EnableFeishu' }
+if (@($EnableSkills).Count -gt 0) {
+    $renderArguments += '-EnableSkills'
+    $renderArguments += @($EnableSkills)
+}
 $renderOutput = & $powershellCommand.Source @renderArguments | Out-String
 if ($LASTEXITCODE -ne 0) { throw "Codex configuration rendering failed: $renderOutput" }
 $configMerger = Join-Path $PackRoot 'configure-codex.ps1'
@@ -365,7 +378,16 @@ $connectionStatus = [ordered]@{
     schemaVersion = 1
     feishu = if ($feishuEnabled) { 'enabled-awaiting-tenant-health' } else { 'disabled-awaiting-credentials' }
     codexConfig = [string]$configStatus.status
-    apiServices = [ordered]@{ templatesInstalled = $true; credentialsStored = $false; note = 'DashScope, Image-2 and Seedance values remain user-provided environment variables.' }
+    apiServices = [ordered]@{
+        templatesInstalled = $true
+        enabled = [ordered]@{
+            'dashscope-web-search' = @($EnabledApiServices) -contains 'dashscope-web-search'
+            'image-2' = @($EnabledApiServices) -contains 'image-2'
+            'seedance' = @($EnabledApiServices) -contains 'seedance'
+        }
+        credentialsStored = $false
+        note = 'DashScope, Image-2 and Seedance values remain user-provided environment variables.'
+    }
     secretsStored = $false
 }
 $connectionStatus | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $connectionStatusPath -Encoding UTF8

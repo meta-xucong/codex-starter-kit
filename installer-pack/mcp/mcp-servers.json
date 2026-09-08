@@ -42,7 +42,8 @@
         "feishu.app-id",
         "feishu.app-secret",
         "feishu.base-url",
-        "feishu.auth-mode"
+        "feishu.auth-mode",
+        "feishu.user-access-token"
       ],
       "healthCheck": {
         "offlineCommand": "scripts/start-feishu-mcp.ps1 -PackageCache <private-feishu-cache> -DryRun",

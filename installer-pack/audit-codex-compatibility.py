@@ -428,8 +428,8 @@ def check_external_adapters(audit: Audit) -> None:
         "seedance.official-link-ttl-hours",
         "seedance.refund-rule",
     }
-    if len(field_ids) != 18 or len(field_ids) != len(set(field_ids)):
-        audit.error(f"Expected 18 unique guided connection fields, found {len(field_ids)}/{len(set(field_ids))}.")
+    if len(field_ids) != 19 or len(field_ids) != len(set(field_ids)):
+        audit.error(f"Expected 19 unique guided connection fields, found {len(field_ids)}/{len(set(field_ids))}.")
     if not expected_fields.issubset(field_ids):
         audit.error(f"External adapter fields are incomplete: {sorted(expected_fields - set(field_ids))}")
     secret_fields = {str(item.get("id")) for item in fields if item.get("secret")}
