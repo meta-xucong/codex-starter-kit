@@ -23,9 +23,9 @@
 | `guided-config` | 7 | 需要用户在连接向导中配置 API、MCP 或网络服务 |
 | `unsupported` | 4 | 当前没有可验证的兼容入口或再分发依据，保持禁用 |
 
-默认安装 25 个核心 Skill 和 7 个 Agent。安装其余可配置/可补运行时的 Skill（合计 46 个，仍排除 4 个
-unsupported）使用 `-IncludeNonDefault`；需要一键装入全部 50 个 Skill 时，直接运行安装包根目录的
-`Install-Codex-Starter.cmd` 或 `install-all.ps1`。
+默认脚本安装 25 个核心 Skill 和 7 个 Agent。安装其余可配置/可补运行时的 Skill（合计 46 个，仍排除 4 个
+unsupported）使用 `-IncludeNonDefault`；需要一键装入全部 50 个 Skill 时，使用安装包根目录的向导或
+`install-all.ps1`。
 
 ```powershell
 .\scripts\install-to-codex.ps1 -IncludeNonDefault
@@ -114,6 +114,18 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\install-all.ps1
 ```
 
+双击 `Install-Codex-Starter.cmd` 会打开 Windows 图形向导。向导根据
+[`manifest/connection-fields.json`](manifest/connection-fields.json)、[`manifest/mcp-servers.json`](manifest/mcp-servers.json)
+和 [`manifest/api-services.json`](manifest/api-services.json) 动态列出 1 个 MCP 与 3 个直连 API 的配置项，共 19 个
+连接字段。每个外部连接默认不勾选；不填写或点击“跳过配置，直接安装”不会启用连接，但仍会把全部 Skill、Agent、运行时、
+离线依赖和 MCP 包安装到本机。需要启用某项服务时，勾选它并填写该组必填字段；密钥输入框会遮罩，非空值只写入当前 Windows
+用户环境变量，Codex 配置只保存环境变量名。留空的密钥会沿用已有的本机用户环境变量（若存在），不会在界面或日志中显示。
+向导中的“清理本机已有环境变量”默认关闭，只有明确勾选后才会清理未启用连接的旧变量。
+
+无界面部署或自动化测试仍可直接调用 `install-all.ps1`；设置 `CODEX_STARTER_NONINTERACTIVE=1`，或给 `.cmd` 传入参数，
+也会跳过图形向导并进入脚本路径。向导的字段、校验、密钥边界和跳过策略见
+[`docs/CONNECTION-WIZARD.md`](docs/CONNECTION-WIZARD.md)。
+
 安装器只写自己拥有的 Agent/Skill 文件，不覆盖已有同名文件，除非显式加 `-Overwrite`；不会删除其他 Agent、
 Skill 或全局 `AGENTS.md`。它会校验 `file-manifest.json` 与 `checksums.sha256`，部署本地 MCP wrapper、配置
 渲染器和兼容性审计器，并记录不含凭据的所有权清单与 readiness 报告。即使使用 `-Overwrite`，当前文件哈希
@@ -141,6 +153,7 @@ Skill 或全局 `AGENTS.md`。它会校验 `file-manifest.json` 与 `checksums.s
 - MCP：当前只登记一个需向导配置的 `feishu` 服务，见 [`manifest/mcp-servers.json`](manifest/mcp-servers.json)。安装包携带已锁定的离线 npm closure 和本机 wrapper；wrapper 只执行包内的 `lark-mcp`，不调用 `npx` 或联网下载。
 - 直连 API：DashScope 网页搜索、图像服务、视频服务，见 [`manifest/api-services.json`](manifest/api-services.json)。DashScope 只接受 `compatible-mode/v1` 根地址，并要求显式填写当前可用的联网搜索模型；脚本自行拼接 `/chat/completions`，不保留猜测模型。
 - 连接字段：统一的密钥、端点、认证方式、校验和能力映射，见 [`manifest/connection-fields.json`](manifest/connection-fields.json)。
+  图形向导按这些清单生成表单，不在脚本中另维护一套凭据字段；所有外部连接都是显式选择后才启用。
 
 Image-2 和 Seedance 都是用户明确选择后才启用的外部兼容网关，不是 Codex 原生能力。两者要求专用 API Key、
 根级 HTTPS 地址、实际模型和服务方给出的外部路由 ID；不得把 Codex 任务 ID 猜作 `agent-id`。Image-2 会锁定

@@ -30,7 +30,7 @@
       },
       "transports": ["stdio", "streamable-http", "sse"],
       "configFragment": "config-fragments/feishu-official-stdio.template.toml",
-      "connectionFields": ["feishu.app-id", "feishu.app-secret", "feishu.base-url", "feishu.auth-mode"],
+      "connectionFields": ["feishu.app-id", "feishu.app-secret", "feishu.base-url", "feishu.auth-mode", "feishu.user-access-token"],
       "healthCheck": {"offlineCommand": "scripts/start-feishu-mcp.ps1 -PackageCache <private-feishu-cache> -DryRun", "codexCommand": "codex mcp get feishu --json", "expected": "Node >=20, locked package name/version/entrypoint and the wrapper validate without exposing credentials; then Codex parses the 25-tool allowlist and a read-only document/tool probe succeeds", "failure": "连接未健康时只显示配置步骤，不声称已经读写飞书"},
       "enableWhen": ["runtime.node20-feishu-optional.ready", "runtime.feishu-mcp-package.ready", "feishu.app-id", "feishu.app-secret", "codex.mcp.feishu.healthy"],
       "secretHandling": {"officialCli": "The upstream CLI currently accepts App Secret via -s/--app-secret arguments.", "risk": "The upstream child process still receives the secret as an argument and trusted local process inspection may reveal it.", "requiredMitigation": "Codex config forwards only process environment variable names to the local wrapper. The wrapper never logs values, validates the locked package metadata and JavaScript entrypoint, invokes Node directly instead of a cmd.exe shim, and refuses to enable the server if credentials or package files are absent.", "publicTemplateRule": "The public template contains placeholders and environment variable names only and remains disabled."},

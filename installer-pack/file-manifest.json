@@ -48,7 +48,7 @@
     },
     {
       "path": "audit-codex-compatibility.py",
-      "sha256": "a061e9a713866974eb7ac3d6b510809a1fcd68819430778109470ff856b0aed3",
+      "sha256": "3afc9753406063e6ec0cac1fd16d814f1bf8763179b1cb65fb9904ad6eb80a3f",
       "bytes": 51055,
       "owned": true
     },
@@ -90,8 +90,14 @@
     },
     {
       "path": "docs/CODEX-ADAPTATION-DEVELOPMENT.md",
-      "sha256": "cfae569f00e19dd192dfcd9693cc14f8b2b286dad005662310b6ec5645c59da9",
+      "sha256": "709b68abc683841f78b930176908d4ea8dd5368da68a1b6da859e7ec53543b0b",
       "bytes": 20817,
+      "owned": true
+    },
+    {
+      "path": "docs/CONNECTION-WIZARD.md",
+      "sha256": "e612603f0b76e86898edbc5eba7123b1179ede989a96ccf8e375e92e1bf3bd67",
+      "bytes": 2791,
       "owned": true
     },
     {
@@ -120,20 +126,26 @@
     },
     {
       "path": "install-all.ps1",
-      "sha256": "b8773e25e482c428a42520666c72d0d12f030dacbf58ebdd48c0123132e93f68",
-      "bytes": 715,
+      "sha256": "f188ff34dd726a798282c5ea17348767984fdd044d1fb3de8e9498dd58bf4b5f",
+      "bytes": 1402,
       "owned": true
     },
     {
       "path": "Install-Codex-Starter.cmd",
-      "sha256": "5b63cce37877b8e0796d10a63871a432d2fc1722637882aa87e31f1af9206b01",
-      "bytes": 444,
+      "sha256": "5156255debe90d3aaa698c24170caf7408195ce3a014efb3460ced6083b1c268",
+      "bytes": 667,
       "owned": true
     },
     {
       "path": "install-to-codex.ps1",
-      "sha256": "1a63678e68d722a4fd805b9db7f355d63f2bf374856eacc751b3ee06ccac5388",
-      "bytes": 26986,
+      "sha256": "3f1d63174e4d2ceff69d90b6a11328e0a26c13fe96c58d1b5e819455a5f27ea2",
+      "bytes": 27920,
+      "owned": true
+    },
+    {
+      "path": "install-wizard.ps1",
+      "sha256": "b41a422905a9a5d4bfab954ed27991bb877a6d7716b9fcce532d99b742f17581",
+      "bytes": 21754,
       "owned": true
     },
     {
@@ -162,8 +174,8 @@
     },
     {
       "path": "manifest/connection-fields.json",
-      "sha256": "770e1b756c1489812754d743dd55290f73724de84416b64e0ff545b11d6ab6ab",
-      "bytes": 5905,
+      "sha256": "ae7865aeaaa95834b14a5eb2afa12693be8d568a65ec2ebdc4b7e863d6c1de1f",
+      "bytes": 6893,
       "owned": true
     },
     {
@@ -186,8 +198,8 @@
     },
     {
       "path": "manifest/mcp-servers.json",
-      "sha256": "628ee33de5cdcf207acc6b67ac7d53b1c545f13a257199042e3bd7a41eae9144",
-      "bytes": 2898,
+      "sha256": "ab8b8a450e25460919dd9709117c8d8b8e6a7890b7fffd4e4fbd9c5aa62b41af",
+      "bytes": 2926,
       "owned": true
     },
     {
@@ -216,8 +228,8 @@
     },
     {
       "path": "mcp/connection-fields.json",
-      "sha256": "738a4048f41e1fded259f70ffd22fefc931b6b5c4dfa41fe93d06d3afaf495f3",
-      "bytes": 8142,
+      "sha256": "f565043e08cc45b731193e8037370fbeb74eb0ff2367c5f9bebe1b8131488035",
+      "bytes": 9435,
       "owned": true
     },
     {
@@ -234,8 +246,8 @@
     },
     {
       "path": "mcp/mcp-servers.json",
-      "sha256": "22ae8ad0ef2799c91bbfeaaa7889deb1d9f4bad96a4e929e864389dc76fad9f9",
-      "bytes": 3178,
+      "sha256": "50af79766dcf859f2ffdad17a60f0d58841b7bb2e2065fd54ab426c5edb2da0b",
+      "bytes": 3214,
       "owned": true
     },
     {
@@ -258,20 +270,20 @@
     },
     {
       "path": "pack.json",
-      "sha256": "cf6806fee699b4f6caeaa81ae168552d73316d95f94ab7d679fd59dd2da8764c",
+      "sha256": "638981818ae76797b21f830066fd166fa7ee1a3153684fda8fea970ed6777afc",
       "bytes": 3479,
       "owned": true
     },
     {
       "path": "README.md",
-      "sha256": "d7242e5b206d9263ece14e85285915119ed2e13b25b2b01e10f7188c3402b1ae",
-      "bytes": 11958,
+      "sha256": "009764fc806914773b0b45b791fcd62d5d8693cc9d57bc0574bed79ed8d63219",
+      "bytes": 13369,
       "owned": true
     },
     {
       "path": "render-codex-config.ps1",
-      "sha256": "24532385efdaccd4b193d5e25734bebf799fbc6087ed0a24c3efefea4e840bc1",
-      "bytes": 6349,
+      "sha256": "0615320cbe46ea88c7c2bfe5040657937988db8766db13a1b4ed22137d5dfca0",
+      "bytes": 6910,
       "owned": true
     },
     {

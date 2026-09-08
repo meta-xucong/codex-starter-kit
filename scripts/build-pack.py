@@ -490,6 +490,7 @@ def build() -> dict:
         ("render-codex-config.ps1", PACK / "render-codex-config.ps1"),
         ("configure-codex.ps1", PACK / "configure-codex.ps1"),
         ("install-all.ps1", PACK / "install-all.ps1"),
+        ("install-wizard.ps1", PACK / "install-wizard.ps1"),
         ("Install-Codex-Starter.cmd", PACK / "Install-Codex-Starter.cmd"),
         ("audit-codex-compatibility.py", PACK / "audit-codex-compatibility.py"),
         ("test-adapter-contracts.py", PACK / "test-adapter-contracts.py"),
@@ -503,6 +504,7 @@ def build() -> dict:
         "KNOWN-LIMITATIONS.md",
         "POST-MERGE-CORRECTIVE-DEVELOPMENT.md",
         "FULL-BUNDLE-ONE-CLICK-DEVELOPMENT.md",
+        "CONNECTION-WIZARD.md",
     ]:
         shutil.copy2(ROOT / "docs" / doc_name, PACK / "docs" / doc_name)
     for relative in [

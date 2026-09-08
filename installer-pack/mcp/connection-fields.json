@@ -4,10 +4,11 @@
     {
       "id": "feishu.app-id",
       "serviceId": "feishu",
-      "label": "飞书 App ID",
+      "label": "飞书 App ID（应用账号）",
       "type": "text",
       "required": true,
       "secret": false,
+      "envVar": "FEISHU_APP_ID",
       "defaultUrl": "",
       "validation": {
         "regex": "^cli_[A-Za-z0-9_-]+$"
@@ -20,10 +21,11 @@
     {
       "id": "feishu.app-secret",
       "serviceId": "feishu",
-      "label": "飞书 App Secret",
+      "label": "飞书 App Secret（应用密码）",
       "type": "secret",
       "required": true,
       "secret": true,
+      "envVar": "FEISHU_APP_SECRET",
       "defaultUrl": "",
       "validation": {
         "minLength": 8
@@ -40,6 +42,7 @@
       "type": "url",
       "required": false,
       "secret": false,
+      "envVar": "FEISHU_DOMAIN",
       "defaultUrl": "https://open.feishu.cn",
       "validation": {
         "scheme": "https",
@@ -60,6 +63,7 @@
       "type": "select",
       "required": false,
       "secret": false,
+      "envVar": "FEISHU_AUTH_MODE",
       "defaultUrl": "",
       "validation": {
         "choices": [
@@ -68,7 +72,28 @@
           "oauth"
         ]
       },
-      "help": "按实际权限选择；user 模式还需 FEISHU_USER_ACCESS_TOKEN，OAuth 模式由官方 CLI 发起授权。文档正文目前只读。",
+      "help": "按实际权限选择；user 模式还需 User Access Token，OAuth 模式由官方 CLI 发起授权。文档正文目前只读。",
+      "capabilities": [
+        "mcp.feishu"
+      ]
+    },
+    {
+      "id": "feishu.user-access-token",
+      "serviceId": "feishu",
+      "label": "飞书 User Access Token（user 模式）",
+      "type": "secret",
+      "required": false,
+      "conditionalRequired": {
+        "field": "feishu.auth-mode",
+        "equals": "user"
+      },
+      "secret": true,
+      "envVar": "FEISHU_USER_ACCESS_TOKEN",
+      "defaultUrl": "",
+      "validation": {
+        "minLength": 8
+      },
+      "help": "仅当认证方式选择 user 时填写；留空则无法启用 user 模式。",
       "capabilities": [
         "mcp.feishu"
       ]
@@ -80,6 +105,7 @@
       "type": "secret",
       "required": true,
       "secret": true,
+      "envVar": "DASHSCOPE_API_KEY",
       "defaultUrl": "",
       "validation": {
         "minLength": 20
@@ -96,6 +122,7 @@
       "type": "url",
       "required": true,
       "secret": false,
+      "envVar": "DASHSCOPE_BASE_URL",
       "defaultUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "validation": {
         "scheme": "https",
@@ -113,6 +140,7 @@
       "type": "text",
       "required": true,
       "secret": false,
+      "envVar": "DASHSCOPE_MODEL",
       "defaultUrl": "",
       "validation": {
         "minLength": 1
@@ -129,6 +157,7 @@
       "type": "secret",
       "required": true,
       "secret": true,
+      "envVar": "IMAGE_2_API_KEY",
       "defaultUrl": "",
       "validation": {
         "minLength": 20
@@ -145,6 +174,7 @@
       "type": "url",
       "required": true,
       "secret": false,
+      "envVar": "IMAGE_2_API_BASE_URL",
       "defaultUrl": "",
       "validation": {
         "scheme": "https"
@@ -161,6 +191,7 @@
       "type": "text",
       "required": true,
       "secret": false,
+      "envVar": "IMAGE_2_MODEL",
       "defaultUrl": "",
       "validation": {
         "minLength": 1
@@ -177,6 +208,7 @@
       "type": "text",
       "required": true,
       "secret": false,
+      "envVar": "IMAGE_2_AGENT_ID",
       "defaultUrl": "",
       "validation": {
         "minLength": 1,
@@ -194,6 +226,7 @@
       "type": "secret",
       "required": true,
       "secret": true,
+      "envVar": "SEEDANCE_API_KEY",
       "defaultUrl": "",
       "validation": {
         "minLength": 20
@@ -210,6 +243,7 @@
       "type": "url",
       "required": true,
       "secret": false,
+      "envVar": "SEEDANCE_API_BASE_URL",
       "defaultUrl": "",
       "validation": {
         "scheme": "https"
@@ -226,6 +260,7 @@
       "type": "text",
       "required": true,
       "secret": false,
+      "envVar": "SEEDANCE_MODEL",
       "defaultUrl": "",
       "validation": {
         "minLength": 1
@@ -242,6 +277,7 @@
       "type": "text",
       "required": true,
       "secret": false,
+      "envVar": "SEEDANCE_AGENT_ID",
       "defaultUrl": "",
       "validation": {
         "minLength": 1,
@@ -259,6 +295,7 @@
       "type": "text",
       "required": true,
       "secret": false,
+      "envVar": "SEEDANCE_PRECHARGE_POINTS",
       "defaultUrl": "",
       "validation": {
         "regex": "^[1-9][0-9]*$"
@@ -275,6 +312,7 @@
       "type": "text",
       "required": true,
       "secret": false,
+      "envVar": "SEEDANCE_OFFICIAL_LINK_TTL_HOURS",
       "defaultUrl": "",
       "validation": {
         "regex": "^[1-9][0-9]*$"
@@ -291,6 +329,7 @@
       "type": "text",
       "required": true,
       "secret": false,
+      "envVar": "SEEDANCE_REFUND_RULE",
       "defaultUrl": "",
       "validation": {
         "minLength": 1

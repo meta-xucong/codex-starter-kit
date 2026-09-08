@@ -184,12 +184,14 @@ foreach ($requiredPackFile in @(
     'docs\KNOWN-LIMITATIONS.md',
     'docs\POST-MERGE-CORRECTIVE-DEVELOPMENT.md',
     'docs\FULL-BUNDLE-ONE-CLICK-DEVELOPMENT.md',
+    'docs\CONNECTION-WIZARD.md',
     'install-to-codex.ps1',
     'render-codex-config.ps1',
     'configure-codex.ps1',
     'install-all.ps1',
     'Install-Codex-Starter.cmd',
-    'audit-codex-compatibility.py'
+    'audit-codex-compatibility.py',
+    'install-wizard.ps1'
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot ('installer-pack\' + $requiredPackFile)) -PathType Leaf)) { throw "Pack extension file missing: $requiredPackFile" }
 }
@@ -232,7 +234,18 @@ foreach ($wheel in $wheelManifest.wheels) {
 if (@($mcpServers.servers).Count -ne 1 -or [string]$mcpServers.servers[0].id -ne 'feishu') { throw 'MCP inventory must contain the guided Feishu server record.' }
 if ([string]$feishuTools.toolNameCase -ne 'dot' -or (@($feishuTools.readTools).Count + @($feishuTools.writeTools).Count) -ne 25) { throw 'Feishu tool contract must contain 25 dot-case tools.' }
 if (@($apiServices.services).Count -ne 3) { throw 'Expected three direct API service records.' }
-if (@($connectionFields.fields).Count -ne 18) { throw 'Expected eighteen guided connection fields, including explicit external models, gateway routing, and Seedance policy fields.' }
+if (@($connectionFields.fields).Count -ne 19) { throw 'Expected nineteen guided connection fields, including Feishu user-token mode, explicit external models, gateway routing, and Seedance policy fields.' }
+$fieldIds = [System.Collections.Generic.HashSet[string]]::new()
+$fieldEnvVars = [System.Collections.Generic.HashSet[string]]::new()
+foreach ($field in @($connectionFields.fields)) {
+    $fieldId = [string]$field.id
+    $envVar = [string]$field.envVar
+    if ([string]::IsNullOrWhiteSpace($fieldId) -or -not $fieldIds.Add($fieldId)) { throw "Connection field IDs must be unique and non-empty: $fieldId" }
+    if ([string]::IsNullOrWhiteSpace($envVar) -or -not $fieldEnvVars.Add($envVar)) { throw "Connection field envVar values must be unique and non-empty: $envVar" }
+}
+foreach ($requiredFieldId in @('feishu.user-access-token','dashscope.model','image-2.agent-id','seedance.precharge-points','seedance.official-link-ttl-hours','seedance.refund-rule')) {
+    if (-not $fieldIds.Contains($requiredFieldId)) { throw "Guided connection field is missing: $requiredFieldId" }
+}
 
 if ([int]$dependencies.schemaVersion -ne 2) { throw 'Dependency schema must be 2.' }
 $dependencyIds = [System.Collections.Generic.HashSet[string]]::new()
@@ -322,6 +335,23 @@ try {
     New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
     $ps = (Get-Command powershell -ErrorAction SilentlyContinue)
     if (-not $ps) { throw 'Windows PowerShell is required for the PowerShell smoke tests.' }
+    foreach ($wizardPath in @(
+        (Join-Path $repoRoot 'scripts\install-wizard.ps1'),
+        (Join-Path $repoRoot 'installer-pack\install-wizard.ps1')
+    )) {
+        $wizardReport = & $ps.Source -NoProfile -ExecutionPolicy Bypass -File $wizardPath -ValidateOnly | ConvertFrom-Json
+        if ([int]$wizardReport.connectionFieldCount -ne 19 -or @($wizardReport.services).Count -ne 4) {
+            throw "Connection wizard schema smoke test failed: $wizardPath"
+        }
+    }
+    $gatingRoot = Join-Path $smokeRoot 'skill-gating'
+    $gatingOutput = Join-Path $smokeRoot 'skill-gating.toml'
+    New-Item -ItemType Directory -Force -Path $gatingRoot | Out-Null
+    $gatingReport = & $ps.Source -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'scripts\render-codex-config.ps1') -OutputPath $gatingOutput -SkillRoot $gatingRoot -EnableSkills web-search-extraction -Overwrite | ConvertFrom-Json
+    $gatingText = Get-Content -LiteralPath $gatingOutput -Raw -Encoding UTF8
+    if (@($gatingReport.enabledSkills) -notcontains 'web-search-extraction') { throw 'Skill gating smoke test did not report the selected API Skill.' }
+    $gatingEnabledMatches = [regex]::Matches($gatingText, '(?m)^enabled = true\s*$')
+    if ($gatingEnabledMatches.Count -ne 1) { throw 'Skill gating smoke test expected exactly one explicitly enabled non-core Skill.' }
     & $ps.Source -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'skills\python-env-setup\scripts\check_python_env.ps1') -Json | ConvertFrom-Json | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Python environment smoke test failed.' }
     # Use an ASCII folder-name token so Windows PowerShell 5.1 cannot misdecode a UTF-8/no-BOM Chinese literal.
