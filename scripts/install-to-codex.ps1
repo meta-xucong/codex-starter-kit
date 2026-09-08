@@ -39,13 +39,40 @@ function Resolve-PackOwnedFile([string]$RelativePath) {
     if (-not $candidate.StartsWith($packRootFull, [StringComparison]::OrdinalIgnoreCase)) { throw "Pack path escapes root: $RelativePath" }
     return $candidate
 }
+$canonicalTextExtensions = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($extension in @('.cmd', '.env', '.in', '.json', '.lock', '.md', '.ps1', '.py', '.sha256', '.toml', '.txt', '.yaml', '.yml')) {
+    [void]$canonicalTextExtensions.Add($extension)
+}
+function Get-CanonicalFileHash([string]$Path) {
+    $extension = [IO.Path]::GetExtension($Path)
+    if (-not $canonicalTextExtensions.Contains($extension)) {
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $stream = New-Object System.IO.MemoryStream
+    for ($index = 0; $index -lt $bytes.Length; $index++) {
+        if ($bytes[$index] -eq 13) {
+            if (($index + 1) -lt $bytes.Length -and $bytes[$index + 1] -eq 10) { $index++ }
+            $stream.WriteByte([byte]10)
+        } else {
+            $stream.WriteByte($bytes[$index])
+        }
+    }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($stream.ToArray())).Replace('-', '')).ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+        $stream.Dispose()
+    }
+}
 $manifestPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($entry in $manifest.files) {
     $relativeManifestPath = ([string]$entry.path).Replace('\','/')
     if (-not $manifestPaths.Add($relativeManifestPath)) { throw "Duplicate pack manifest path: $relativeManifestPath" }
     $source = Resolve-PackOwnedFile ([string]$entry.path)
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Pack file missing: $($entry.path)" }
-    $hash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hash = Get-CanonicalFileHash $source
     if ($hash -ne ([string]$entry.sha256).ToLowerInvariant()) { throw "Pack hash mismatch: $($entry.path)" }
 }
 $checksumPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -57,7 +84,7 @@ foreach ($line in Get-Content -LiteralPath $checksumFile) {
     if (-not $checksumPaths.Add($relative)) { throw "Duplicate pack checksum path: $relative" }
     $source = Resolve-PackOwnedFile $relative
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Checksum target missing: $relative" }
-    $hash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hash = Get-CanonicalFileHash $source
     if ($hash -ne $match.Groups['hash'].Value.ToLowerInvariant()) { throw "Pack checksum mismatch: $relative" }
 }
 $expectedChecksumPaths = [System.Collections.Generic.HashSet[string]]::new($manifestPaths, [StringComparer]::OrdinalIgnoreCase)
