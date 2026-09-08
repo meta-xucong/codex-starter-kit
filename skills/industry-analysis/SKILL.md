@@ -174,15 +174,14 @@ description: 产业链分析与行业趋势预判。执行产业链图谱绘制�
 
 ## 数据来源
 
-> ⚠️ **所有网络搜索必须使用 `web-search-extraction` 技能**
+优先使用当前 Codex 会话提供的网页搜索/浏览能力，打开一手来源并记录发布日期、统计口径和适用范围。
+如果网页能力不可用，只使用用户提供的材料并明确实时性限制；不得虚构报告、财报或政策内容。
 
-- 行业研究报告（使用 `web-search-extraction` 获取艾瑞、易观、Gartner等）
-- 政府政策文件与解读（使用 `web-search-extraction` 获取）
-- 上市公司财报（使用 `web-search-extraction` 获取）
-- 专利数据库（使用 `web-search-extraction` 获取）
-- 投融资数据（使用 `web-search-extraction` 获取）
-- 行业协会数据（使用 `web-search-extraction` 获取）
-- 专业媒体与智库（使用 `web-search-extraction` 获取）
+- 行业研究报告（艾瑞、易观、Gartner 等，注意付费与访问边界）
+- 政府政策文件与统计数据
+- 上市公司财报与公告
+- 专利数据库与公开技术资料
+- 投融资数据、行业协会数据、专业媒体与智库
 
 ## 注意事项
 

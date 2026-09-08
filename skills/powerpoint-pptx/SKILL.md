@@ -1,7 +1,5 @@
 ---
 name: powerpoint-pptx
-slug: powerpoint-pptx
-version: 1.0.0
 description: Create, edit, and automate PowerPoint presentations with python-pptx for slides, layouts, charts, and batch processing.
 ---
 

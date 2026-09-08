@@ -1,6 +1,5 @@
 ---
 name: xiaohongshu-writing
-version: "1.1.0"
 description: "小红书爆款内容写作助手，帮助生成高点击率、**像人写**的笔记。包含去AI味检查、7种标题公式、5种开头模板、3种结尾模板、SEO优化。Use when user wants to write XiaoHongShu content, generate viral post titles, or needs help with RedNote writing. Trigger on: 写小红书笔记、小红书文案、爆款标题、种草笔记、学习日记、干货分享。"
 ---
 

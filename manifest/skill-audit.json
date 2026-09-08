@@ -146,9 +146,9 @@
       "verification": {
         "skillFile": "skills/china-stock-analysis/SKILL.md",
         "windowsEntry": "data_fetcher.py --help; financial_analyzer.py --help; realtime_quote.py --help; stock_screener.py --help; technical_analysis.py --help; valuation_calculator.py --help",
-        "smoke": "frontmatter, pack-copy, and dependency health-check path"
-      },
-      "notes": ""
+      "smoke": "frontmatter, pack-copy, dependency health-check path, provider-failure closure, provenance, neutral financial analysis, and fake AkShare no-network contract tests"
+    },
+    "notes": "行情缓存已迁移到项目 CODEX_DATA_DIR/CHINA_STOCK_CACHE_DIR，按代码与允许的数据类型生成路径且只缓存完整结果；实时和 AkShare 数据入口记录来源/时点/完整性并对全量或部分失败返回非零状态。技术分析不再模拟行情或生成交易信号；财务分析和报告模板已删除固定评级、综合分、排名、目标价与行业均值占位。筛选和估值只执行实际字段或显式、可归因假设。"
     },
     {
       "id": "competitor-intelligence",
@@ -239,7 +239,7 @@
         "windowsEntry": "skills/daily-reflection/scripts/reflection.ps1 health",
         "smoke": "PowerShell JSONL log/summary round-trip"
       },
-      "notes": "核心复盘使用 Codex 项目文件与 PowerShell JSONL；原 Python 数据库脚本只作为可选兼容增强。"
+      "notes": "核心复盘使用 Codex 项目文件与 PowerShell JSONL；原 Python 数据库脚本只作为可选兼容增强，其月度主题字段已改为确定性的用户短语频次提取，不再占位返回空结果。"
     },
     {
       "id": "data-assistant",
@@ -498,9 +498,9 @@
         }
       ],
       "capabilities": [
-        "飞书文档读写"
+        "飞书文档标题、纯文本和块结构读取"
       ],
-      "notes": "仅保留流程说明，MCP 待配置。",
+      "notes": "已适配官方 Lark MCP dot-case 工具；当前锁定版本按官方限制保持文档只读，不承诺直接编辑或上传下载。",
       "installByDefault": false,
       "afterRemediationStatus": "guided-config",
       "enableWhen": [
@@ -528,9 +528,9 @@
         }
       ],
       "capabilities": [
-        "飞书云盘文件管理"
+        "飞书云盘浏览、元数据和受控文件管理"
       ],
-      "notes": "仅保留流程说明，MCP 待配置。",
+      "notes": "已适配官方 Lark MCP dot-case 工具；文件上传下载保持不支持，写操作受 Codex 审批策略约束。",
       "installByDefault": false,
       "afterRemediationStatus": "guided-config",
       "enableWhen": [
@@ -560,7 +560,7 @@
       "capabilities": [
         "飞书文件权限"
       ],
-      "notes": "仅保留流程说明，MCP 待配置。",
+      "notes": "已适配官方 Lark MCP 权限工具；移除协作者和转移所有者属于高风险显式写操作。",
       "installByDefault": false,
       "afterRemediationStatus": "guided-config",
       "enableWhen": [
@@ -588,9 +588,9 @@
         }
       ],
       "capabilities": [
-        "飞书知识库导航"
+        "飞书知识库导航和受控节点管理"
       ],
-      "notes": "仅保留流程说明，MCP 待配置。",
+      "notes": "已适配官方 Lark MCP dot-case Wiki 工具；页面正文读取委托 feishu-doc，正文编辑不在当前范围。",
       "installByDefault": false,
       "afterRemediationStatus": "guided-config",
       "enableWhen": [
@@ -715,9 +715,9 @@
       "verification": {
         "skillFile": "skills/fund-portfolio/SKILL.md",
         "windowsEntry": "fund_screener.py --help; portfolio_builder.py --help; risk_assessor.py --help; sip_calculator.py --help",
-        "smoke": "frontmatter, pack-copy, and dependency health-check path"
-      },
-      "notes": ""
+      "smoke": "frontmatter, pack-copy, dependency health-check path, provider-failure closure, explicit scenario, neutral risk, and user-note labelling contract tests"
+    },
+    "notes": "筛选器只暴露 AkShare 排行接口实际读取的基金类型及 1/3 年收益字段，接口失败非零退出。配置构建器要求带来源的用户审阅模型，只换算金额并保留 fund_type_notes 原标签；定投只比较显式收益场景。风险评估器删除硬编码波动率、风险评级、适配人群和调仓/止损建议，要求完整来源、时点与场景参数。"
     },
     {
       "id": "growth-analyst",
@@ -793,8 +793,8 @@
           "kind": "api-service",
           "required": true,
           "autoInstallable": false,
-          "healthCheck": "IMAGE_2_API_BASE_URL non-empty and documented /health or dry-run",
-          "failureMessage": "未配置图像服务时只生成确认清单，不提交任务。"
+        "healthCheck": "IMAGE_2_API_BASE_URL is a root HTTPS URL; IMAGE_2_MODEL and IMAGE_2_AGENT_ID are explicit; offline adapter tests pass",
+        "failureMessage": "未配置图像模型或网关路由 ID 时不生成清单；未配置端点或专用凭据时不提交任务。"
         },
         {
           "id": "credential.image-2-api-key",
@@ -824,7 +824,7 @@
         "windowsEntry": "image_2_gen.py --help; missing credentials exits safely",
         "smoke": "frontmatter, pack-copy, and dependency health-check path"
       },
-      "notes": ""
+    "notes": "专用 API Key 不回退到 OPENAI_API_KEY；外部 agent-id 不是 Codex 任务 ID。远程参考图受 HTTPS、公网地址、重定向和 25MB 限制，本地参考图按 SHA-256 锁定。"
     },
     {
       "id": "image-prompt-generator",
@@ -846,7 +846,7 @@
         "windowsEntry": "Codex workflow / frontmatter",
         "smoke": "frontmatter, pack-copy, and dependency health-check path"
       },
-      "notes": ""
+      "notes": "提示词生成不依赖图像服务；用户明确要求实际图片时优先使用 Codex 原生图像能力，外部 image-2 仅显式调用。"
     },
     {
       "id": "industry-analysis",
@@ -945,9 +945,9 @@
       "verification": {
         "skillFile": "skills/macro-research/SKILL.md",
         "windowsEntry": "cycle_analyzer.py --help; policy_analyzer.py --help; sentiment_monitor.py --help",
-        "smoke": "frontmatter, pack-copy, and dependency health-check path"
-      },
-      "notes": ""
+      "smoke": "frontmatter, pack-copy, dependency health-check path, explicit cycle-rule, policy-evidence, sentiment-weight, and neutral-output contract tests"
+    },
+    "notes": "周期阶段只由显式增长/通胀变化和用户审阅规则场景计算；政策分析要求原文证据、传导依据和条件场景。情绪监控删除固定 mock 指标、情绪档位和仓位建议，并要求六项完整指标、显式合计为 1 的权重、数据时点和来源；缺字段时非零退出。"
     },
     {
       "id": "market-sizing-analysis",
@@ -1149,7 +1149,7 @@
     },
     {
       "id": "pdf-processing-toolkit",
-      "status": "requires-runtime",
+      "status": "unsupported/disabled",
       "defaultEnabled": false,
       "dependencies": [
         {
@@ -1204,17 +1204,18 @@
         "表单与生成"
       ],
       "installByDefault": false,
-      "afterRemediationStatus": "auto-installable-runtime",
+      "afterRemediationStatus": "unsupported",
       "enableWhen": [
+        "license-evidence-approved",
         "skill-installed",
         "runtime-healthy"
       ],
       "verification": {
         "skillFile": "skills/pdf-processing-toolkit/SKILL.md",
         "windowsEntry": "Codex workflow / frontmatter",
-        "smoke": "frontmatter, pack-copy, and dependency health-check path"
+        "smoke": "frontmatter and provenance warning; must remain disabled without license evidence"
       },
-      "notes": ""
+      "notes": "原始 frontmatter 声称 Proprietary 且引用缺失的 LICENSE.txt；在再分发条款可核验前保持 unsupported。"
     },
     {
       "id": "powerpoint-pptx",
@@ -1312,9 +1313,9 @@
         }
       ],
       "capabilities": [
-        "高风险操作拦截",
-        "删除与迁移安全审查",
-        "财务计算边界"
+        "删除与迁移的精确范围审查",
+        "所有权、哈希与链接边界保护",
+        "运行时配置备份、校验与回滚"
       ],
       "installByDefault": true,
       "afterRemediationStatus": "core-ready",
@@ -1327,7 +1328,7 @@
         "windowsEntry": "Codex workflow / frontmatter",
         "smoke": "frontmatter, pack-copy, and dependency health-check path"
       },
-      "notes": ""
+      "notes": "已移除与磁盘安全无关的财务计算触发器和一律拒绝只读检查的旧策略；当前流程与 Codex 的精确授权、只读预检、可恢复优先和用户改动保护原则一致。"
     },
     {
       "id": "seedance2-0-video-gen",
@@ -1351,8 +1352,8 @@
           "kind": "api-service",
           "required": true,
           "autoInstallable": false,
-          "healthCheck": "SEEDANCE_API_BASE_URL non-empty and dry-run available",
-          "failureMessage": "未配置视频服务时只生成确认清单，不提交任务。"
+        "healthCheck": "SEEDANCE_API_BASE_URL is a root HTTPS URL; model, gateway routing ID, precharge points, refund rule, and link TTL are explicit; offline adapter tests pass",
+        "failureMessage": "未配置模型、网关路由 ID 或服务方费用策略时不生成清单；未配置端点或专用凭据时不提交任务。"
         },
         {
           "id": "credential.seedance-api-key",
@@ -1382,7 +1383,7 @@
         "windowsEntry": "seedance_video_gen.py --help; missing credentials exits safely",
         "smoke": "frontmatter, pack-copy, and dependency health-check path"
       },
-      "notes": ""
+    "notes": "不再猜测模型、20000 积分或 24 小时策略；媒体 URL 必须为 HTTPS，重复素材严格保留；任务记录写入项目数据目录而不是已安装 Skill。已删除无法可靠绑定当前 Codex 会话的旧会话历史读取入口。"
     },
     {
       "id": "self-improvement-agent",
@@ -1403,9 +1404,9 @@
       "verification": {
         "skillFile": "skills/self-improvement-agent/SKILL.md",
         "windowsEntry": "Codex workflow / frontmatter",
-        "smoke": "frontmatter, pack-copy, and dependency health-check path"
-      },
-      "notes": ""
+      "smoke": "frontmatter, pack-copy, dependency health-check path, reviewed rubric, explicit model/valuation assumptions, and contextual due-diligence template contract tests"
+    },
+    "notes": "商业评估只计算用户审阅评分表；财务模型显式区分净增长、流失、CAC、成本、初始现金和流动性缓冲，不判断健康度或推荐融资轮次。估值方法并列展示，不平均为公允值或生成谈判建议。尽调生成器要求法域、行业与交易结构，只生成全部为未审阅/待确认的起点清单，不自动分优先级、负责人、周期或投资处置。"
     },
     {
       "id": "skills-search",
@@ -1448,9 +1449,9 @@
       "verification": {
         "skillFile": "skills/traffic-hunter/SKILL.md",
         "windowsEntry": "Codex workflow / frontmatter",
-        "smoke": "frontmatter, pack-copy, and dependency health-check path"
-      },
-      "notes": ""
+      "smoke": "frontmatter, pack-copy, dependency health-check path, reviewed allocation policy, explicit transaction-cost, and neutral tracker contract tests"
+    },
+    "notes": "资产配置只把带来源的用户政策换算为金额；再平衡只计算当前到目标的机械差额，阈值和卖出成本率必须显式提供；追踪器要求真实历史序列、无风险利率、基准、时点与来源。三个入口均不生成产品推荐、评分、收益承诺、调仓、止盈或止损建议。"
     },
     {
       "id": "travel-planner",
@@ -1494,7 +1495,7 @@
         "windowsEntry": "plan_generator.py --help; travel_db.py --help",
         "smoke": "frontmatter, pack-copy, and dependency health-check path"
       },
-      "notes": ""
+      "notes": "已移除未实现且会虚假返回成功的旧 Node index.js/package.json；当前只有已登记的 Python 入口。"
     },
     {
       "id": "user-research",
@@ -1699,7 +1700,7 @@
           "kind": "capability",
           "required": true,
           "autoInstallable": false,
-          "healthCheck": "Test-NetConnection -ComputerName wttr.in -Port 443",
+        "healthCheck": "current Codex weather/web capability is available, or an explicitly allowed public weather endpoint responds",
           "failureMessage": "当前为离线模式，不能提供实时数据。"
         }
       ],
@@ -1718,7 +1719,7 @@
         "windowsEntry": "Invoke-RestMethod or Codex web tool",
         "smoke": "offline branch reports network requirement"
       },
-      "notes": ""
+      "notes": "优先使用当前 Codex 原生天气/网页能力；curl/PowerShell 公开服务仅作允许联网时的回退。"
     },
     {
       "id": "weather-forecast",
@@ -1730,7 +1731,7 @@
           "kind": "capability",
           "required": true,
           "autoInstallable": false,
-          "healthCheck": "Test-NetConnection -ComputerName wttr.in -Port 443",
+        "healthCheck": "current Codex weather/web capability is available, or an explicitly allowed public weather endpoint responds",
           "failureMessage": "当前为离线模式，不能提供实时数据。"
         }
       ],
@@ -1750,7 +1751,7 @@
         "windowsEntry": "skills/weather-forecast/scripts/weather_db.ps1 health",
         "smoke": "set/get city round-trip in isolated WEATHER_DATA_DIR"
       },
-      "notes": "城市偏好已改为 PowerShell JSON 存储，实时天气仍要求网络。"
+      "notes": "城市偏好已改为 PowerShell JSON 存储；实时查询优先使用 Codex 原生天气/网页能力，公开 HTTP 服务仅作回退。"
     },
     {
       "id": "web-content-fetcher",
@@ -1841,6 +1842,14 @@
           "failureMessage": "未配置服务地址时不调用适配器。"
         },
         {
+          "id": "connection.dashscope-model",
+          "kind": "connection",
+          "required": true,
+          "autoInstallable": false,
+          "healthCheck": "DASHSCOPE_MODEL non-empty; no repository default is allowed",
+          "failureMessage": "未配置服务当前支持且启用联网搜索的实际模型时不调用适配器。"
+        },
+        {
           "id": "capability.network",
           "kind": "capability",
           "required": true,
@@ -1853,19 +1862,20 @@
         "联网搜索适配",
         "结构化摘要"
       ],
-      "notes": "Codex 原生联网工具可用时优先使用原生工具。",
+      "notes": "Codex 原生联网工具可用时优先使用原生工具；显式选择适配器后仍必须提供专用 Key、compatible-mode/v1 根地址和实际模型，脚本再拼接 /chat/completions。",
       "installByDefault": false,
       "afterRemediationStatus": "guided-config",
       "enableWhen": [
         "skill-installed",
         "credential.dashscope-api-key",
         "connection.dashscope-base-url",
+        "connection.dashscope-model",
         "capability.network"
       ],
       "verification": {
         "skillFile": "skills/web-search-extraction/SKILL.md",
-        "windowsEntry": "web_search.py --help; missing credentials exits safely",
-        "smoke": "frontmatter, pack-copy, and dependency health-check path"
+        "windowsEntry": "web_search.py --help; missing credentials/model exits nonzero before network I/O",
+        "smoke": "frontmatter, pack-copy, dependency health-check path, and no-network adapter contract tests"
       }
     },
     {
@@ -1910,7 +1920,7 @@
         "windowsEntry": "start_article.py --help; polish_text.py --help; generate_cover.py --help",
         "smoke": "frontmatter, pack-copy, and dependency health-check path"
       },
-      "notes": ""
+    "notes": "草稿和封面默认目录已从 Skill 树迁移到项目 codex-data；草稿文件名净化，封面限制尺寸/像素并校验输出格式。文本检查器已删除未实现的 auto-fix 参数与发布就绪评分，只输出可人工复核的编辑提示。"
     },
     {
       "id": "word-docx",

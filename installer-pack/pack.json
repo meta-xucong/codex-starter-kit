@@ -1,12 +1,14 @@
 {
   "schemaVersion": 2,
   "id": "codex-starter",
-  "version": "1.1.0",
-  "sourceCommit": "80181e6c79ca33cf109cfead9b1fb151b7bcec4a",
-  "sourceDate": "2026-09-07",
+  "version": "1.2.0",
+  "sourceCommit": "671f2f486ce10825e02ea547e3ce3667062676f0",
+  "sourceCommitRole": "git-head",
+  "sourceTreeSha256": "27eedb7c0121e28a54bcc5fc028c806aaf9700998cf64072cc88794ab1d98eb6",
+  "sourceDate": "2026-09-08",
   "compatibleCodex": {
     "minCodexVersion": "0.144.0",
-    "testedCodexVersion": "0.144.1",
+    "testedCodexVersion": "0.147.0",
     "agentFormat": "TOML with name/description/developer_instructions",
     "skillRoot": "%USERPROFILE%\\.agents\\skills",
     "agentRoot": "%USERPROFILE%\\.codex\\agents",
@@ -100,5 +102,9 @@
   "runtimeArtifacts": "manifest/runtime-artifacts.json",
   "mcpServers": "mcp/mcp-servers.json",
   "apiServices": "mcp/api-services.json",
-  "connectionFields": "mcp/connection-fields.json"
+  "connectionFields": "mcp/connection-fields.json",
+  "compatibilityAudit": "audit-codex-compatibility.py",
+  "adapterContractTests": "test-adapter-contracts.py",
+  "configRenderer": "render-codex-config.ps1",
+  "installer": "install-to-codex.ps1"
 }

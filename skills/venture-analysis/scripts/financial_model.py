@@ -3,365 +3,292 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""
-财务建模器
+"""Transparent venture financial scenario model.
 
-预测创业公司未来财务表现
-
-Usage:
-    python financial_model.py --years 5 --initial-users 1000 --arpu 100
+Every business input and liquidity buffer is explicit. The script does not
+label a model healthy, recommend financing rounds, or infer investment action.
 """
+
+from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
-from typing import Dict, List
+import math
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 
-def calculate_unit_economics(arpu: float, cac: float, gross_margin: float, churn_rate: float) -> Dict:
-    """计算单位经济模型"""
-    
-    # LTV = ARPU * 毛利率 / 月流失率 * 12（年化）
-    monthly_churn = churn_rate / 100
-    if monthly_churn > 0:
-        ltv = arpu * (gross_margin / 100) / monthly_churn
-    else:
-        ltv = arpu * 12  # 假设留存12个月
-    
-    # LTV/CAC 比率
-    ltv_cac_ratio = ltv / cac if cac > 0 else 0
-    
-    # 回本周期（月）
-    payback_months = cac / (arpu * gross_margin / 100) if arpu > 0 else 0
-    
+def _finite(value: Any, field: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} 必须是有限数值。")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} 必须是有限数值。") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field} 必须是有限数值。")
+    return number
+
+
+def calculate_unit_economics(
+    monthly_arpu: float,
+    cac_per_new_user: float,
+    gross_margin: float,
+    monthly_churn_rate: float,
+) -> dict[str, Any]:
+    monthly_churn = monthly_churn_rate / 100
+    if not 0 < monthly_churn <= 1:
+        raise ValueError("monthly_churn_rate 必须大于 0 且不超过 100。")
+    monthly_gross_profit_per_user = monthly_arpu * gross_margin / 100
+    ltv = monthly_gross_profit_per_user / monthly_churn
+    ratio = None if cac_per_new_user == 0 else ltv / cac_per_new_user
+    payback = None if monthly_gross_profit_per_user == 0 else cac_per_new_user / monthly_gross_profit_per_user
     return {
-        "arpu": arpu,
-        "cac": cac,
+        "monthly_arpu": monthly_arpu,
+        "cac_per_new_user": cac_per_new_user,
         "gross_margin": gross_margin,
-        "churn_rate": churn_rate,
-        "ltv": round(ltv, 2),
-        "ltv_cac_ratio": round(ltv_cac_ratio, 2),
-        "payback_months": round(payback_months, 1),
-        "healthy": ltv_cac_ratio >= 3 and payback_months <= 12
+        "monthly_churn_rate": monthly_churn_rate,
+        "simple_gross_profit_ltv": round(ltv, 2),
+        "ltv_to_cac": None if ratio is None else round(ratio, 4),
+        "simple_payback_months": None if payback is None else round(payback, 2),
+        "methodology": "LTV = 月 ARPU × 毛利率 ÷ 月流失率；未建模 cohort、折现、扩张收入或回收失败。",
     }
 
 
 def project_financials(
     years: int,
-    initial_users: int,
-    growth_rate: float,
-    arpu: float,
-    cac: float,
+    initial_active_users: int,
+    annual_net_user_growth_rate: float,
+    monthly_arpu: float,
+    cac_per_new_user: float,
     gross_margin: float,
-    fixed_costs: float,
-    burn_rate: float
-) -> List[Dict]:
-    """预测未来财务数据"""
-    
+    monthly_churn_rate: float,
+    monthly_fixed_costs: float,
+    monthly_other_cash_outflow: float,
+) -> list[dict[str, Any]]:
     projections = []
-    users = initial_users
-    
+    opening_users = float(initial_active_users)
+    annual_retention = (1 - monthly_churn_rate / 100) ** 12
     for year in range(1, years + 1):
-        # 用户增长
-        users = int(users * (1 + growth_rate / 100))
-        
-        # 收入
-        revenue = users * arpu * 12  # 年化收入
-        
-        # 成本
-        cogs = revenue * (1 - gross_margin / 100)  # 销售成本
-        marketing_cost = users * cac  # 营销成本（新用户获客）
-        total_costs = cogs + marketing_cost + fixed_costs * 12
-        
-        # 利润
-        gross_profit = revenue - cogs
-        operating_profit = revenue - total_costs
-        
-        # 现金流
-        cash_flow = operating_profit - burn_rate * 12
-        
-        projections.append({
-            "year": year,
-            "users": users,
-            "revenue": round(revenue, 2),
-            "gross_profit": round(gross_profit, 2),
-            "operating_profit": round(operating_profit, 2),
-            "cash_flow": round(cash_flow, 2),
-            "cogs": round(cogs, 2),
-            "marketing_cost": round(marketing_cost, 2),
-            "fixed_costs": round(fixed_costs * 12, 2)
-        })
-    
+        ending_users = max(0.0, opening_users * (1 + annual_net_user_growth_rate / 100))
+        retained_users = opening_users * annual_retention
+        gross_new_users = max(0.0, ending_users - retained_users)
+        average_active_users = (opening_users + ending_users) / 2
+        revenue = average_active_users * monthly_arpu * 12
+        cost_of_revenue = revenue * (1 - gross_margin / 100)
+        acquisition_cost = gross_new_users * cac_per_new_user
+        fixed_costs = monthly_fixed_costs * 12
+        other_cash_outflow = monthly_other_cash_outflow * 12
+        operating_profit = revenue - cost_of_revenue - acquisition_cost - fixed_costs
+        scenario_cash_flow = operating_profit - other_cash_outflow
+        projections.append(
+            {
+                "year": year,
+                "opening_active_users": round(opening_users, 2),
+                "retained_active_users_before_acquisition": round(retained_users, 2),
+                "gross_new_users_required": round(gross_new_users, 2),
+                "ending_active_users": round(ending_users, 2),
+                "average_active_users": round(average_active_users, 2),
+                "revenue": round(revenue, 2),
+                "cost_of_revenue": round(cost_of_revenue, 2),
+                "acquisition_cost": round(acquisition_cost, 2),
+                "fixed_costs": round(fixed_costs, 2),
+                "other_cash_outflow": round(other_cash_outflow, 2),
+                "operating_profit": round(operating_profit, 2),
+                "scenario_cash_flow": round(scenario_cash_flow, 2),
+            }
+        )
+        opening_users = ending_users
     return projections
 
 
-def find_break_even_year(projections: List[Dict]) -> int:
-    """找到盈亏平衡年份"""
-    for p in projections:
-        if p["operating_profit"] > 0:
-            return p["year"]
-    return -1
-
-
-def calculate_funding_needs(projections: List[Dict], initial_cash: float = 0) -> Dict:
-    """计算融资需求"""
-    
-    min_cash = initial_cash
-    cumulative_cash = initial_cash
-    
-    for p in projections:
-        cumulative_cash += p["cash_flow"]
-        if cumulative_cash < min_cash:
-            min_cash = cumulative_cash
-    
-    # 融资需求 = 最大现金缺口 + 6个月运营资金缓冲
-    funding_needed = abs(min_cash) + projections[0]["fixed_costs"] / 2 if min_cash < 0 else 0
-    
+def calculate_liquidity(
+    projections: list[dict[str, Any]],
+    initial_cash: float,
+    monthly_fixed_costs: float,
+    monthly_other_cash_outflow: float,
+    liquidity_buffer_months: float,
+) -> dict[str, Any]:
+    cash = initial_cash
+    minimum_cash = initial_cash
+    cash_path = []
+    for projection in projections:
+        cash += projection["scenario_cash_flow"]
+        minimum_cash = min(minimum_cash, cash)
+        cash_path.append({"year": projection["year"], "ending_cash": round(cash, 2)})
+    buffer_amount = (monthly_fixed_costs + monthly_other_cash_outflow) * liquidity_buffer_months
+    additional_funding_scenario = max(0.0, buffer_amount - minimum_cash)
     return {
         "initial_cash": initial_cash,
-        "min_cash_required": round(min_cash, 2),
-        "funding_needed": round(funding_needed, 2),
-        "recommended_rounds": calculate_funding_rounds(funding_needed)
+        "minimum_cash": round(minimum_cash, 2),
+        "liquidity_buffer_months": liquidity_buffer_months,
+        "liquidity_buffer_amount": round(buffer_amount, 2),
+        "additional_funding_scenario": round(additional_funding_scenario, 2),
+        "cash_path": cash_path,
+        "methodology": "资金缺口场景 = 显式流动性缓冲金额 − 模型期内最低现金（下限为 0）；不推荐融资轮次或条款。",
     }
 
 
-def calculate_funding_rounds(total_needed: float) -> List[Dict]:
-    """建议融资轮次"""
-    if total_needed <= 0:
-        return []
-    
-    rounds = []
-    remaining = total_needed
-    round_names = ["天使轮", "Pre-A轮", "A轮", "B轮"]
-    
-    for i, name in enumerate(round_names):
-        if remaining <= 0:
-            break
-        
-        # 每轮最多融18个月资金
-        round_amount = min(remaining, 5000000 * (i + 1))  # 递增
-        rounds.append({
-            "round": name,
-            "amount": round(round_amount, 2),
-            "timing": f"第{i*12+6}个月"
-        })
-        remaining -= round_amount
-    
-    return rounds
+def generate_model(args: SimpleNamespace) -> dict[str, Any]:
+    years = args.years
+    initial_users = args.initial_active_users
+    if not isinstance(years, int) or not 1 <= years <= 30:
+        raise ValueError("years 必须是 1–30 的整数。")
+    if not isinstance(initial_users, int) or initial_users < 0:
+        raise ValueError("initial_active_users 必须是非负整数。")
 
+    values = {
+        "annual_net_user_growth_rate": _finite(args.annual_net_user_growth_rate, "annual_net_user_growth_rate"),
+        "monthly_arpu": _finite(args.monthly_arpu, "monthly_arpu"),
+        "cac_per_new_user": _finite(args.cac_per_new_user, "cac_per_new_user"),
+        "gross_margin": _finite(args.gross_margin, "gross_margin"),
+        "monthly_churn_rate": _finite(args.monthly_churn_rate, "monthly_churn_rate"),
+        "monthly_fixed_costs": _finite(args.monthly_fixed_costs, "monthly_fixed_costs"),
+        "monthly_other_cash_outflow": _finite(args.monthly_other_cash_outflow, "monthly_other_cash_outflow"),
+        "initial_cash": _finite(args.initial_cash, "initial_cash"),
+        "liquidity_buffer_months": _finite(args.liquidity_buffer_months, "liquidity_buffer_months"),
+    }
+    if values["annual_net_user_growth_rate"] <= -100:
+        raise ValueError("annual_net_user_growth_rate 必须大于 -100%。")
+    if any(values[key] < 0 for key in (
+        "monthly_arpu",
+        "cac_per_new_user",
+        "monthly_fixed_costs",
+        "monthly_other_cash_outflow",
+        "initial_cash",
+        "liquidity_buffer_months",
+    )):
+        raise ValueError("收入、成本、现金和缓冲月份不得为负。")
+    if not 0 <= values["gross_margin"] <= 100:
+        raise ValueError("gross_margin 必须在 0–100 之间。")
+    if not 0 < values["monthly_churn_rate"] <= 100:
+        raise ValueError("monthly_churn_rate 必须大于 0 且不超过 100。")
+    as_of = str(args.as_of or "").strip()
+    sources = [str(item).strip() for item in (args.source or []) if str(item).strip()]
+    if not as_of or not sources:
+        raise ValueError("必须提供非空 --as-of 和至少一个 --source。")
 
-def generate_model(args) -> Dict:
-    """生成财务模型"""
-    
-    # 单位经济模型
     unit_economics = calculate_unit_economics(
-        args.arpu, args.cac, args.gross_margin, args.churn_rate
+        values["monthly_arpu"],
+        values["cac_per_new_user"],
+        values["gross_margin"],
+        values["monthly_churn_rate"],
     )
-    
-    # 财务预测
     projections = project_financials(
-        args.years,
-        args.initial_users,
-        args.growth_rate,
-        args.arpu,
-        args.cac,
-        args.gross_margin,
-        args.fixed_costs,
-        args.burn_rate
+        years,
+        initial_users,
+        values["annual_net_user_growth_rate"],
+        values["monthly_arpu"],
+        values["cac_per_new_user"],
+        values["gross_margin"],
+        values["monthly_churn_rate"],
+        values["monthly_fixed_costs"],
+        values["monthly_other_cash_outflow"],
     )
-    
-    # 盈亏平衡点
-    break_even_year = find_break_even_year(projections)
-    
-    # 融资需求
-    funding = calculate_funding_needs(projections, args.initial_cash)
-    
+    break_even_year = next(
+        (item["year"] for item in projections if item["operating_profit"] >= 0),
+        None,
+    )
+    liquidity = calculate_liquidity(
+        projections,
+        values["initial_cash"],
+        values["monthly_fixed_costs"],
+        values["monthly_other_cash_outflow"],
+        values["liquidity_buffer_months"],
+    )
     return {
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "inputs_as_of": as_of,
+        "sources": sources,
         "assumptions": {
-            "projection_years": args.years,
-            "initial_users": args.initial_users,
-            "monthly_growth_rate": args.growth_rate,
-            "arpu": args.arpu,
-            "cac": args.cac,
-            "gross_margin": args.gross_margin,
-            "monthly_churn": args.churn_rate,
-            "monthly_fixed_costs": args.fixed_costs,
-            "monthly_burn": args.burn_rate,
-            "initial_cash": args.initial_cash
+            "projection_years": years,
+            "initial_active_users": initial_users,
+            **values,
         },
         "unit_economics": unit_economics,
         "projections": projections,
-        "break_even_year": break_even_year,
-        "funding": funding,
-        "analysis": generate_analysis(unit_economics, projections, break_even_year),
-        "risks": generate_risks(args, projections)
+        "first_nonnegative_operating_profit_year": break_even_year,
+        "liquidity": liquidity,
+        "methodology": (
+            "年度用户目标按显式年净增长率计算；月流失率转换为年留存，获客数为达到年末目标所需的补充用户。"
+            "收入按年初/年末平均活跃用户计算。所有结果都是恒定参数场景，不是财务预测承诺。"
+        ),
+        "limitations": [
+            "未建模月度季节性、价格变化、税、营运资本、资本开支、融资稀释或用户 cohort 差异。",
+            "流动性缓冲只覆盖固定成本和显式其他现金流出，不代表法定或专业建议。",
+            "脚本不使用 LTV/CAC 或回本期阈值判断健康度，也不推荐融资轮次。",
+        ],
     }
 
 
-def generate_analysis(unit_economics: Dict, projections: List[Dict], break_even_year: int) -> Dict:
-    """生成分析结论"""
-    
-    analysis = {
-        "unit_economics_comment": "",
-        "growth_comment": "",
-        "profitability_comment": "",
-        "overall_comment": ""
-    }
-    
-    # 单位经济分析
-    if unit_economics["healthy"]:
-        analysis["unit_economics_comment"] = f"单位经济健康，LTV/CAC={unit_economics['ltv_cac_ratio']:.1f}，回本周期{unit_economics['payback_months']:.0f}个月"
-    else:
-        analysis["unit_economics_comment"] = f"单位经济需改善，LTV/CAC={unit_economics['ltv_cac_ratio']:.1f}（建议>3），回本周期{unit_economics['payback_months']:.0f}个月"
-    
-    # 增长分析
-    final_users = projections[-1]["users"]
-    initial_users = projections[0]["users"]
-    growth_multiple = final_users / initial_users if initial_users > 0 else 0
-    analysis["growth_comment"] = f"{len(projections)}年用户增长{growth_multiple:.1f}倍，期末用户{final_users:,}人"
-    
-    # 盈利分析
-    if break_even_year > 0:
-        analysis["profitability_comment"] = f"预计第{break_even_year}年盈亏平衡"
-    else:
-        analysis["profitability_comment"] = "预测期内未能盈亏平衡，需延长预测或调整假设"
-    
-    # 综合评价
-    if unit_economics["healthy"] and break_even_year <= 3:
-        analysis["overall_comment"] = "财务模型健康，具备可持续发展能力"
-    elif unit_economics["healthy"]:
-        analysis["overall_comment"] = "单位经济可行，但盈利周期较长"
-    else:
-        analysis["overall_comment"] = "财务模型需优化，建议调整商业模式"
-    
-    return analysis
-
-
-def generate_risks(args, projections: List[Dict]) -> List[str]:
-    """生成风险提示"""
-    risks = []
-    
-    if args.growth_rate > 20:
-        risks.append(f"月增长率{args.growth_rate}%假设较高，实际可能难以持续")
-    if args.cac > args.arpu * 3:
-        risks.append("获客成本过高，单位经济可能不健康")
-    if projections[-1]["operating_profit"] < 0:
-        risks.append("预测期内未能盈利，需持续融资")
-    if args.churn_rate > 5:
-        risks.append(f"月流失率{args.churn_rate}%偏高，用户留存压力大")
-    
-    if not risks:
-        risks.append("模型假设合理，但需持续跟踪实际数据")
-    
-    return risks
-
-
-def format_report(model: Dict) -> str:
-    """格式化财务模型报告（投资官六段式）"""
-    
+def format_report(model: dict[str, Any]) -> str:
+    unit = model["unit_economics"]
+    liquidity = model["liquidity"]
     lines = [
-        "=" * 60,
-        "财务建模报告",
-        "=" * 60,
-        "",
-        "## 🧭 投资官视角",
-        "",
-        "### 一、核心结论",
-        f"【单位经济】LTV={model['unit_economics']['ltv']:,.0f}元，LTV/CAC={model['unit_economics']['ltv_cac_ratio']:.1f}",
-        f"【回本周期】{model['unit_economics']['payback_months']:.0f}个月",
-        f"【盈亏平衡】第{model['break_even_year']}年" if model['break_even_year'] > 0 else "【盈亏平衡】预测期内未实现",
-        f"【融资需求】{model['funding']['funding_needed']:,.0f}元",
-        "",
-        "### 二、背后逻辑",
-        f"• {model['analysis']['unit_economics_comment']}",
-        f"• {model['analysis']['growth_comment']}",
-        f"• {model['analysis']['profitability_comment']}",
-        "",
-        "【财务预测】",
-        f"{'年份':<6} {'用户数':>10} {'收入':>12} {'毛利':>12} {'经营利润':>12}",
-        "-" * 60
+        "创业财务场景",
+        f"输入时点：{model['inputs_as_of']}",
+        "来源：" + "；".join(model["sources"]),
+        f"简单毛利 LTV：{unit['simple_gross_profit_ltv']}",
+        f"LTV/CAC：{unit['ltv_to_cac']}",
+        f"简单回本月数：{unit['simple_payback_months']}",
+        f"首个经营利润非负年份：{model['first_nonnegative_operating_profit_year']}",
+        f"显式缓冲下的追加资金场景：{liquidity['additional_funding_scenario']}",
+        "年度场景：",
     ]
-    
-    for p in model["projections"]:
-        lines.append(f"第{p['year']:<3} {p['users']:>10,} {p['revenue']:>12,.0f} "
-                    f"{p['gross_profit']:>12,.0f} {p['operating_profit']:>12,.0f}")
-    
-    lines.extend([
-        "",
-        "### 三、风险在哪里",
-    ])
-    
-    for risk in model["risks"]:
-        lines.append(f"⚠️ {risk}")
-    
-    lines.extend([
-        "",
-        "### 四、适合谁",
-        "• 投资期限3-5年的长期投资者",
-        "• 能够承受早期亏损的风险投资者",
-        "• 对行业增长有信心的战略投资者",
-        "",
-        "### 五、操作策略",
-    ])
-    
-    if model["funding"]["funding_needed"] > 0:
-        lines.append("【建议融资计划】")
-        for round_info in model["funding"]["recommended_rounds"]:
-            lines.append(f"• {round_info['round']}: {round_info['amount']:,.0f}元 ({round_info['timing']})")
-    
-    lines.extend([
-        "",
-        "【关键假设验证】",
-        "• 每月跟踪实际用户数 vs 预测",
-        "• 每季度验证获客成本CAC",
-        "• 持续监控用户流失率",
-        "• 及时调整财务预测模型",
-        "",
-        "### 六、如果判断错了",
-        "• 如用户增长不及预期，及时降低固定成本",
-        "• 如CAC持续高于预期，重新审视获客渠道",
-        "• 如流失率居高不下，优先改善产品体验",
-        "• 如无法按期盈亏平衡，提前启动下一轮融资",
-        "",
-        "=" * 60,
-        f"生成时间：{model['generated_at']}",
-        "=" * 60
-    ])
-    
+    lines.extend(
+        f"- 第{item['year']}年：期末活跃用户 {item['ending_active_users']}，收入 {item['revenue']}，"
+        f"经营利润 {item['operating_profit']}，场景现金流 {item['scenario_cash_flow']}"
+        for item in model["projections"]
+    )
+    lines.extend(["方法边界：" + model["methodology"], *["限制：" + item for item in model["limitations"]]])
     return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="财务建模器")
-    parser.add_argument("--years", type=int, default=5, help="预测年数")
-    parser.add_argument("--initial-users", type=int, default=1000, help="初始用户数")
-    parser.add_argument("--growth-rate", type=float, default=10, help="月增长率(%)")
-    parser.add_argument("--arpu", type=float, default=100, help="每用户月收入(元)")
-    parser.add_argument("--cac", type=float, default=300, help="获客成本(元)")
-    parser.add_argument("--gross-margin", type=float, default=70, help="毛利率(%)")
-    parser.add_argument("--churn-rate", type=float, default=3, help="月流失率(%)")
-    parser.add_argument("--fixed-costs", type=float, default=50000, help="月固定成本(元)")
-    parser.add_argument("--burn-rate", type=float, default=100000, help="月烧钱速度(元)")
-    parser.add_argument("--initial-cash", type=float, default=0, help="初始现金(元)")
-    parser.add_argument("--output", type=str, help="输出JSON文件")
-    parser.add_argument("--json", action="store_true", help="JSON格式输出")
-    
-    args = parser.parse_args()
-    
-    model = generate_model(args)
-    
-    if args.json or args.output:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="显式输入的创业财务场景模型")
+    parser.add_argument("--years", type=int, required=True, help="场景年数（1–30）")
+    parser.add_argument("--initial-active-users", type=int, required=True, help="初始活跃用户数")
+    parser.add_argument("--annual-net-user-growth-rate", type=float, required=True, help="年净活跃用户增长率（%）")
+    parser.add_argument("--monthly-arpu", type=float, required=True, help="每活跃用户月收入")
+    parser.add_argument("--cac-per-new-user", type=float, required=True, help="每新增活跃用户获客成本")
+    parser.add_argument("--gross-margin", type=float, required=True, help="毛利率（%）")
+    parser.add_argument("--monthly-churn-rate", type=float, required=True, help="月流失率（%）")
+    parser.add_argument("--monthly-fixed-costs", type=float, required=True, help="月固定成本")
+    parser.add_argument("--monthly-other-cash-outflow", type=float, required=True, help="未计入经营利润的其他月现金流出")
+    parser.add_argument("--initial-cash", type=float, required=True, help="初始现金")
+    parser.add_argument("--liquidity-buffer-months", type=float, required=True, help="流动性缓冲月数场景")
+    parser.add_argument("--as-of", required=True, help="输入数据或假设时点")
+    parser.add_argument("--source", action="append", required=True, help="数据来源或假设依据，可多次使用")
+    parser.add_argument("--output", help="输出 JSON 文件")
+    parser.add_argument("--json", action="store_true", help="输出 JSON")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        model = generate_model(args)
         output = json.dumps(model, ensure_ascii=False, indent=2)
         if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(output)
-            print(f"模型已保存到: {args.output}")
-        else:
+            output_path = Path(args.output).expanduser().resolve()
+            output_path.write_text(output + "\n", encoding="utf-8")
+            print(f"模型已保存到: {output_path}")
+        elif args.json:
             print(output)
-    else:
-        print(format_report(model))
+        else:
+            print(format_report(model))
+        return 0
+    except (OSError, ValueError) as exc:
+        if args.json:
+            print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False))
+        else:
+            print(f"财务场景建模失败：{exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

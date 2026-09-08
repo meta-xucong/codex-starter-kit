@@ -1,7 +1,6 @@
 ---
 name: traffic-hunter
 description: 精准获取流量，搭建内容矩阵与获客系统
-tags: [growth, marketing, content, acquisition]
 ---
 
 # 流量猎手 - Traffic Hunter

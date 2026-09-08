@@ -1,10 +1,16 @@
 ---
 name: pdf-processing-toolkit
 description: Comprehensive PDF manipulation toolkit for extracting text and tables, creating new PDFs, merging/splitting documents, and handling forms. When Codex needs to fill in a PDF form or programmatically process, generate, or analyze PDF documents at scale.
-license: Proprietary. LICENSE.txt has complete terms
 ---
 
 # PDF Processing Guide
+
+## Redistribution status
+
+The imported metadata referenced a proprietary `LICENSE.txt`, but that file is absent from this source snapshot. Treat this Skill as
+disabled and internal-review-only until the repository owner supplies verifiable redistribution terms. An auditable pack may retain this
+quarantined source, but the installer excludes it unless the operator explicitly accepts unsupported content; do not claim that it is
+licensed for redistribution.
 
 ## Overview
 

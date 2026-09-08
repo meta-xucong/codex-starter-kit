@@ -1,5 +1,6 @@
 interface:
   display_name: "健身计划"
-  short_description: "按目标、场景和进度设计训练计划与动作建议。"
+  short_description: "根据目标、训练场景和当前进度，设计可执行计划与安全动作建议。"
+  default_prompt: "Use $fitness-coach to create a safe, progressive workout plan for my goals and constraints."
 policy:
   allow_implicit_invocation: false

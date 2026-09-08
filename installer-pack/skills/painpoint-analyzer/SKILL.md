@@ -1,7 +1,6 @@
 ---
 name: painpoint-analyzer
 description: 深度挖掘用户真实痛点，识别高价值商业机会
-tags: [growth, research, strategy]
 ---
 
 # 痛点洞察师 - Painpoint Analyzer

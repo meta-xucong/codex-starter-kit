@@ -3,293 +3,158 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""
-组合再平衡规划器
+"""Mechanical portfolio target-difference and transaction-cost calculator."""
 
-根据当前组合和目标配置生成调仓方案
-
-Usage:
-    python rebalance_planner.py --current current.json --target target.json
-    python rebalance_planner.py --current "510300:35,159915:25,511880:40" --target "510300:40,159915:30,511880:30"
-"""
+from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
-from typing import Dict, List, Tuple
+import math
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 
-def parse_portfolio_string(portfolio_str: str) -> Dict[str, float]:
-    """解析组合字符串，格式：code1:ratio1,code2:ratio2"""
-    allocations = {}
-    for item in portfolio_str.split(","):
-        parts = item.split(":")
-        if len(parts) == 2:
-            code = parts[0].strip()
-            ratio = float(parts[1].strip())
-            allocations[code] = ratio
-    return allocations
+MAX_INPUT_BYTES = 1024 * 1024
+
+
+def validate_allocations(raw: Any, label: str) -> dict[str, float]:
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(f"{label} 必须是非空的资产到百分比 JSON 对象。")
+    normalized = {}
+    for raw_code, raw_weight in raw.items():
+        code = str(raw_code).strip()
+        if not code:
+            raise ValueError(f"{label} 包含空资产代码。")
+        if isinstance(raw_weight, bool):
+            raise ValueError(f"{label}.{code} 必须是有限数值。")
+        try:
+            weight = float(raw_weight)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label}.{code} 必须是有限数值。") from exc
+        if not math.isfinite(weight) or weight < 0 or weight > 100:
+            raise ValueError(f"{label}.{code} 必须在 0–100 之间。")
+        normalized[code] = weight
+    if not math.isclose(sum(normalized.values()), 100.0, abs_tol=0.01):
+        raise ValueError(f"{label} 权重必须合计 100。")
+    return normalized
 
 
 def calculate_rebalance_plan(
-    current: Dict[str, float],
-    target: Dict[str, float],
+    current: dict[str, float],
+    target: dict[str, float],
     total_value: float,
-    threshold: float = 5.0
-) -> Dict:
-    """计算再平衡方案"""
-    
-    # 合并所有资产代码
-    all_codes = set(current.keys()) | set(target.keys())
-    
-    # 计算当前各资产金额
-    current_amounts = {code: total_value * current.get(code, 0) / 100 for code in all_codes}
-    
-    # 计算目标金额
-    target_amounts = {code: total_value * target.get(code, 0) / 100 for code in all_codes}
-    
-    # 计算差异
-    differences = {}
-    for code in all_codes:
-        diff_pct = target.get(code, 0) - current.get(code, 0)
-        diff_amount = target_amounts.get(code, 0) - current_amounts.get(code, 0)
-        differences[code] = {
-            "current_ratio": current.get(code, 0),
-            "target_ratio": target.get(code, 0),
-            "diff_ratio": diff_pct,
-            "current_amount": current_amounts.get(code, 0),
-            "target_amount": target_amounts.get(code, 0),
-            "diff_amount": diff_amount,
-            "action": "买入" if diff_amount > 0 else "卖出" if diff_amount < 0 else "持有",
-            "needs_rebalance": abs(diff_pct) >= threshold
-        }
-    
-    # 需要调仓的资产
-    rebalance_items = {k: v for k, v in differences.items() if v["needs_rebalance"]}
-    
-    # 计算总调仓金额
-    total_buy = sum(v["diff_amount"] for v in differences.values() if v["diff_amount"] > 0)
-    total_sell = sum(abs(v["diff_amount"]) for v in differences.values() if v["diff_amount"] < 0)
-    
-    # 生成建议
-    suggestions = generate_rebalance_suggestions(differences, threshold)
-    
+    threshold: float,
+    transaction_cost_rate: float,
+) -> dict[str, Any]:
+    current = validate_allocations(current, "current")
+    target = validate_allocations(target, "target")
+    for value, field, lower, upper in (
+        (total_value, "total_value", 0, None),
+        (threshold, "threshold", 0, 100),
+        (transaction_cost_rate, "transaction_cost_rate", 0, 100),
+    ):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            raise ValueError(f"{field} 必须是有限数值。")
+        below_lower_bound = float(value) <= lower if field == "total_value" else float(value) < lower
+        if below_lower_bound:
+            raise ValueError(f"{field} 超出允许范围。")
+        if upper is not None and float(value) > upper:
+            raise ValueError(f"{field} 超出允许范围。")
+
+    differences = []
+    total_increase = 0.0
+    total_decrease = 0.0
+    for code in sorted(set(current) | set(target)):
+        current_weight = current.get(code, 0.0)
+        target_weight = target.get(code, 0.0)
+        difference_points = target_weight - current_weight
+        amount_difference = total_value * difference_points / 100
+        included = abs(difference_points) >= threshold and not math.isclose(difference_points, 0, abs_tol=1e-12)
+        if included and amount_difference > 0:
+            total_increase += amount_difference
+        elif included and amount_difference < 0:
+            total_decrease += -amount_difference
+        differences.append(
+            {
+                "asset": code,
+                "current_percent": current_weight,
+                "target_percent": target_weight,
+                "difference_percentage_points": round(difference_points, 6),
+                "amount_difference": round(amount_difference, 2),
+                "included_by_threshold": included,
+                "direction": "increase" if difference_points > 0 else "decrease" if difference_points < 0 else "unchanged",
+            }
+        )
+    estimated_cost = total_decrease * transaction_cost_rate / 100
     return {
-        "generated_at": datetime.now().isoformat(),
-        "total_value": total_value,
-        "threshold": threshold,
-        "summary": {
-            "total_codes": len(all_codes),
-            "rebalance_codes": len(rebalance_items),
-            "total_buy": round(total_buy, 2),
-            "total_sell": round(total_sell, 2),
-            "estimated_cost": round(total_sell * 0.001, 2)  # 假设交易成本0.1%
-        },
+        "calculated_at": datetime.now(timezone.utc).isoformat(),
+        "portfolio_value": float(total_value),
+        "threshold_percentage_points": float(threshold),
+        "transaction_cost_rate": float(transaction_cost_rate),
         "differences": differences,
-        "rebalance_plan": rebalance_items,
-        "suggestions": suggestions,
-        "execution_steps": generate_execution_steps(differences)
+        "summary": {
+            "total_buy": round(total_increase, 2),
+            "total_sell": round(total_decrease, 2),
+            "estimated_cost": round(estimated_cost, 2),
+            "unfunded_increase_after_estimated_sell_cost": round(
+                max(0.0, total_increase - max(0.0, total_decrease - estimated_cost)), 2
+            ),
+        },
+        "methodology": (
+            "仅计算当前权重到用户给定目标权重的差额；阈值和卖出交易成本率均为显式输入。"
+            "结果不下单，不考虑税、买入费用、滑点、最小交易单位或账户限制。"
+        ),
     }
 
 
-def generate_rebalance_suggestions(differences: Dict, threshold: float) -> List[str]:
-    """生成再平衡建议"""
-    suggestions = []
-    
-    # 检查偏离度
-    max_deviation = max(abs(v["diff_ratio"]) for v in differences.values())
-    if max_deviation < threshold:
-        suggestions.append("组合偏离度较小，可暂不调仓")
-    elif max_deviation < 10:
-        suggestions.append("组合有轻度偏离，建议逐步调整")
-    else:
-        suggestions.append("组合偏离较大，建议尽快再平衡")
-    
-    # 检查交易方向
-    buy_codes = [k for k, v in differences.items() if v["diff_amount"] > 0]
-    sell_codes = [k for k, v in differences.items() if v["diff_amount"] < 0]
-    
-    if len(buy_codes) > len(sell_codes):
-        suggestions.append("买入标的较多，注意资金安排")
-    if len(sell_codes) > 0:
-        suggestions.append(f"先卖出 {', '.join(sell_codes)} 释放资金")
-    
-    # 成本提醒
-    suggestions.append("注意交易成本，频繁调仓会侵蚀收益")
-    suggestions.append("建议分批执行，避免一次性重仓")
-    
-    return suggestions
+def _load_json(path_value: str, label: str) -> dict[str, Any]:
+    path = Path(path_value).expanduser().resolve()
+    if not path.is_file() or path.stat().st_size > MAX_INPUT_BYTES:
+        raise ValueError(f"{label} JSON 不存在或超过 1 MiB。")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} JSON 顶层必须是对象。")
+    return value
 
 
-def generate_execution_steps(differences: Dict) -> List[Dict]:
-    """生成执行步骤"""
-    steps = []
-    
-    # 先卖出
-    sell_items = [(k, v) for k, v in differences.items() if v["diff_amount"] < 0]
-    sell_items.sort(key=lambda x: abs(x[1]["diff_amount"]), reverse=True)
-    
-    for code, info in sell_items:
-        steps.append({
-            "step": len(steps) + 1,
-            "action": "卖出",
-            "code": code,
-            "amount": round(abs(info["diff_amount"]), 2),
-            "ratio": f"{info['current_ratio']}% → {info['target_ratio']}%",
-            "note": "先释放资金"
-        })
-    
-    # 再买入
-    buy_items = [(k, v) for k, v in differences.items() if v["diff_amount"] > 0]
-    buy_items.sort(key=lambda x: x[1]["diff_amount"], reverse=True)
-    
-    for code, info in buy_items:
-        steps.append({
-            "step": len(steps) + 1,
-            "action": "买入",
-            "code": code,
-            "amount": round(info["diff_amount"], 2),
-            "ratio": f"{info['current_ratio']}% → {info['target_ratio']}%",
-            "note": "用卖出资金买入"
-        })
-    
-    return steps
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="组合目标差额计算器")
+    parser.add_argument("--current", required=True, help="当前配置 JSON 文件")
+    parser.add_argument("--target", required=True, help="用户审阅的目标配置 JSON 文件")
+    parser.add_argument("--value", type=float, required=True, help="组合总价值")
+    parser.add_argument("--threshold", type=float, required=True, help="纳入计算的最小偏离百分点")
+    parser.add_argument("--transaction-cost-rate", type=float, required=True, help="卖出交易成本率（%）")
+    parser.add_argument("--output", help="输出 JSON 文件")
+    parser.add_argument("--json", action="store_true", help="输出 JSON")
+    return parser
 
 
-def format_report(plan: Dict) -> str:
-    """格式化再平衡报告（投资官六段式）"""
-    s = plan["summary"]
-    
-    lines = [
-        "=" * 60,
-        "组合再平衡规划方案",
-        "=" * 60,
-        "",
-        "## 🧭 投资官视角",
-        "",
-        "### 一、核心结论",
-        f"【组合总价值】{plan['total_value']:,.0f} 元",
-        f"【需调仓标的】{s['rebalance_codes']} / {s['total_codes']} 只",
-        f"【预计卖出】{s['total_sell']:,.0f} 元",
-        f"【预计买入】{s['total_buy']:,.0f} 元",
-        f"【预估成本】{s['estimated_cost']:,.0f} 元（约{s['estimated_cost']/plan['total_value']*100:.2f}%）",
-        "",
-        "### 二、背后逻辑",
-        "再平衡的本质是'高抛低吸'，通过定期调整让组合回归目标配置：",
-        "• 卖出涨幅过大的资产，锁定收益",
-        "• 买入跌幅较多的资产，摊低成本",
-        "• 维持风险水平在可控范围内",
-        f"• 当前偏离阈值设为 {plan['threshold']}%，超过才触发调仓",
-        "",
-        "### 三、风险在哪里",
-    ]
-    
-    # 检查风险
-    risks = []
-    if s["estimated_cost"] / plan["total_value"] > 0.005:
-        risks.append("交易成本较高，可能侵蚀收益")
-    if s["rebalance_codes"] > 5:
-        risks.append("调仓标的过多，操作复杂")
-    
-    if risks:
-        for risk in risks:
-            lines.append(f"⚠️ {risk}")
-    else:
-        lines.append("✓ 未发现明显风险")
-    
-    lines.extend([
-        "",
-        "### 四、适合谁",
-        "• 已持有组合3个月以上、偏离目标配置的投资者",
-        "• 有明确资产配置目标、希望维持风险水平的投资者",
-        "• 能够承受短期交易成本、追求长期稳定收益的投资者",
-        "",
-        "### 五、操作策略",
-        "【调仓明细】",
-    ])
-    
-    # 显示差异
-    lines.append(f"{'标的':<10} {'当前':>8} {'目标':>8} {'差异':>8} {'操作':>6} {'金额':>12}")
-    lines.append("-" * 60)
-    for code, info in plan["differences"].items():
-        if info["needs_rebalance"]:
-            lines.append(f"{code:<10} {info['current_ratio']:>7.1f}% {info['target_ratio']:>7.1f}% "
-                        f"{info['diff_ratio']:>+7.1f}% {info['action']:>6} {abs(info['diff_amount']):>11,.0f}")
-    
-    lines.extend([
-        "",
-        "【执行建议】",
-    ])
-    for suggestion in plan["suggestions"]:
-        lines.append(f"• {suggestion}")
-    
-    lines.extend([
-        "",
-        "【执行步骤】",
-    ])
-    for step in plan["execution_steps"]:
-        lines.append(f"{step['step']}. {step['action']} {step['code']} {step['amount']:,.0f}元 "
-                    f"({step['ratio']}) - {step['note']}")
-    
-    lines.extend([
-        "",
-        "### 六、如果判断错了",
-        "• 如市场正处于单边上涨行情，再平衡可能踏空，可延迟执行",
-        "• 如市场正处于单边下跌行情，再平衡可能加剧亏损，可分批执行",
-        "• 如调仓后某资产继续下跌，不要恐慌，这是再平衡的正常成本",
-        "• 建议设置'不触发区间'，偏离度在3%以内可忽略",
-        "",
-        "=" * 60,
-        f"生成时间：{plan['generated_at']}",
-        "=" * 60
-    ])
-    
-    return "\n".join(lines)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="组合再平衡规划器")
-    parser.add_argument("--current", type=str, required=True,
-                       help="当前配置JSON文件或格式：code1:ratio1,code2:ratio2")
-    parser.add_argument("--target", type=str, required=True,
-                       help="目标配置JSON文件或格式：code1:ratio1,code2:ratio2")
-    parser.add_argument("--value", type=float, default=100000,
-                       help="组合总价值（元）")
-    parser.add_argument("--threshold", type=float, default=5.0,
-                       help="触发再平衡的偏离阈值（%）")
-    parser.add_argument("--output", type=str, help="输出JSON文件")
-    parser.add_argument("--json", action="store_true", help="JSON格式输出")
-    
-    args = parser.parse_args()
-    
-    # 解析当前配置
-    if args.current.endswith('.json'):
-        with open(args.current, 'r', encoding='utf-8') as f:
-            current = json.load(f)
-    else:
-        current = parse_portfolio_string(args.current)
-    
-    # 解析目标配置
-    if args.target.endswith('.json'):
-        with open(args.target, 'r', encoding='utf-8') as f:
-            target = json.load(f)
-    else:
-        target = parse_portfolio_string(args.target)
-    
-    # 计算再平衡方案
-    plan = calculate_rebalance_plan(current, target, args.value, args.threshold)
-    
-    if args.json or args.output:
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        plan = calculate_rebalance_plan(
+            _load_json(args.current, "current"),
+            _load_json(args.target, "target"),
+            args.value,
+            args.threshold,
+            args.transaction_cost_rate,
+        )
         output = json.dumps(plan, ensure_ascii=False, indent=2)
         if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(output)
-            print(f"方案已保存到: {args.output}")
+            output_path = Path(args.output).expanduser().resolve()
+            output_path.write_text(output + "\n", encoding="utf-8")
+            print(f"差额计算已保存到: {output_path}")
         else:
             print(output)
-    else:
-        print(format_report(plan))
+        return 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        payload = json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)
+        print(payload if args.json else f"再平衡差额计算失败：{exc}", file=sys.stdout if args.json else sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

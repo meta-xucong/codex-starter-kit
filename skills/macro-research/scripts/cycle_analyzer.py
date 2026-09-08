@@ -3,324 +3,267 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""
-周期判断器
+"""Transparent economic-cycle quadrant calculator.
 
-基于美林时钟判断经济周期阶段
-
-Usage:
-    python cycle_analyzer.py --gdp-growth 5.5 --inflation 2.1
+The script does not fetch current data and does not embed GDP/CPI thresholds,
+asset allocations, transition probabilities, or trading advice. Current data
+and a reviewed interpretation policy must be supplied explicitly.
 """
+
+from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
-from typing import Dict, List
+import math
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 
-def identify_cycle_phase(gdp_growth: float, inflation: float, 
-                         gdp_trend: float = 0, inflation_trend: float = 0) -> Dict:
-    """识别经济周期阶段（美林时钟）"""
-    
-    # 判断增长和通胀相对于趋势的位置
-    growth_high = gdp_growth > gdp_trend if gdp_trend else gdp_growth > 5.0
-    inflation_high = inflation > 2.5
-    
-    # 美林时钟四阶段
-    if growth_high and inflation_high:
-        phase = "过热期"
-        description = "经济增长强劲，通胀上升"
-        color = "🔴"
-        characteristics = [
-            "企业盈利强劲",
-            "大宗商品价格上涨",
-            "央行开始收紧货币政策",
-            "股市可能见顶"
-        ]
-    elif growth_high and not inflation_high:
-        phase = "复苏期"
-        description = "经济增长强劲，通胀温和"
-        color = "🟢"
-        characteristics = [
-            "企业盈利改善",
-            "就业市场好转",
-            "货币政策宽松",
-            "股市表现最佳"
-        ]
-    elif not growth_high and not inflation_high:
-        phase = "衰退期"
-        description = "经济增长放缓，通胀下降"
-        color = "🔵"
-        characteristics = [
-            "企业盈利下滑",
-            "失业率上升",
-            "央行降息刺激经济",
-            "债券表现最佳"
-        ]
-    else:  # not growth_high and inflation_high
-        phase = "滞胀期"
-        description = "经济增长放缓，通胀高企"
-        color = "🟡"
-        characteristics = [
-            "企业盈利受压",
-            "成本上升",
-            "央行两难（保增长vs控通胀）",
-            "现金为王"
-        ]
-    
-    return {
-        "phase": phase,
-        "color": color,
-        "description": description,
-        "characteristics": characteristics,
-        "gdp_growth": gdp_growth,
-        "inflation": inflation,
-        "gdp_vs_trend": "高于趋势" if growth_high else "低于趋势",
-        "inflation_level": "高通胀" if inflation_high else "低通胀"
-    }
+MAX_INPUT_BYTES = 1024 * 1024
+PHASE_KEYS = (
+    "growth_up_inflation_down",
+    "growth_up_inflation_up",
+    "growth_down_inflation_up",
+    "growth_down_inflation_down",
+)
 
 
-def get_asset_allocation(phase: str) -> Dict:
-    """获取大类资产配置建议"""
-    
-    allocations = {
-        "复苏期": {
-            "stocks": 50,
-            "bonds": 30,
-            "commodities": 10,
-            "cash": 10,
-            "rationale": "经济向好，企业盈利改善，股票最佳",
-            "preferred_sectors": ["金融", "工业", "可选消费"],
-            "avoid_sectors": ["公用事业", "必需消费"]
-        },
-        "过热期": {
-            "stocks": 30,
-            "bonds": 20,
-            "commodities": 40,
-            "cash": 10,
-            "rationale": "通胀上升，大宗商品受益，股票估值受压",
-            "preferred_sectors": ["能源", "原材料", "科技"],
-            "avoid_sectors": ["债券敏感行业"]
-        },
-        "滞胀期": {
-            "stocks": 20,
-            "bonds": 20,
-            "commodities": 30,
-            "cash": 30,
-            "rationale": "经济停滞+通胀，现金为王，商品抗通胀",
-            "preferred_sectors": ["能源", "必需消费", "医疗"],
-            "avoid_sectors": ["周期股", "成长股"]
-        },
-        "衰退期": {
-            "stocks": 20,
-            "bonds": 50,
-            "commodities": 10,
-            "cash": 20,
-            "rationale": "经济下行，降息周期，债券最佳",
-            "preferred_sectors": ["公用事业", "必需消费", "REITs"],
-            "avoid_sectors": ["周期股", "金融"]
+def _text(value: Any, field: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{field} 必须是非空文本。")
+    return normalized
+
+
+def _number(value: Any, field: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} 必须是有限数值。")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} 必须是有限数值。") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field} 必须是有限数值。")
+    return number
+
+
+def _string_list(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field} 必须是数组。")
+    result = [_text(item, f"{field}[]") for item in value]
+    if not result:
+        raise ValueError(f"{field} 至少包含一项。")
+    return result
+
+
+def load_json(path_value: str) -> dict[str, Any]:
+    path = Path(path_value).expanduser().resolve()
+    if not path.is_file() or path.stat().st_size > MAX_INPUT_BYTES:
+        raise ValueError("规则 JSON 不存在或超过 1 MiB。")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("规则 JSON 顶层必须是对象。")
+    return data
+
+
+def validate_cycle_rules(raw: dict[str, Any]) -> dict[str, Any]:
+    """Validate a reviewed interpretation policy without adding defaults."""
+    rules_as_of = _text(raw.get("as_of"), "rules.as_of")
+    sources = _string_list(raw.get("sources"), "rules.sources")
+    phase_policies_raw = raw.get("phase_policies")
+    if not isinstance(phase_policies_raw, dict):
+        raise ValueError("rules.phase_policies 必须是对象。")
+
+    missing = [key for key in PHASE_KEYS if key not in phase_policies_raw]
+    if missing:
+        raise ValueError(f"rules.phase_policies 缺少阶段：{', '.join(missing)}。")
+
+    phase_policies: dict[str, Any] = {}
+    for key in PHASE_KEYS:
+        raw_policy = phase_policies_raw[key]
+        if not isinstance(raw_policy, dict):
+            raise ValueError(f"rules.phase_policies.{key} 必须是对象。")
+        policy: dict[str, Any] = {
+            "label": _text(raw_policy.get("label"), f"{key}.label"),
+            "description": _text(raw_policy.get("description"), f"{key}.description"),
+            "characteristics": _string_list(raw_policy.get("characteristics"), f"{key}.characteristics"),
         }
+
+        allocation_raw = raw_policy.get("allocation")
+        if allocation_raw is not None:
+            if not isinstance(allocation_raw, dict) or not allocation_raw:
+                raise ValueError(f"{key}.allocation 必须是非空对象。")
+            allocation = {
+                _text(asset, f"{key}.allocation key"): _number(weight, f"{key}.allocation.{asset}")
+                for asset, weight in allocation_raw.items()
+            }
+            if any(weight < 0 for weight in allocation.values()):
+                raise ValueError(f"{key}.allocation 不允许负权重。")
+            if not math.isclose(sum(allocation.values()), 100.0, abs_tol=0.01):
+                raise ValueError(f"{key}.allocation 权重必须合计 100。")
+            policy["allocation"] = allocation
+            policy["allocation_basis"] = _text(
+                raw_policy.get("allocation_basis"), f"{key}.allocation_basis"
+            )
+
+        if raw_policy.get("monitor") is not None:
+            policy["monitor"] = _string_list(raw_policy["monitor"], f"{key}.monitor")
+
+        transition_raw = raw_policy.get("transition")
+        if transition_raw is not None:
+            if not isinstance(transition_raw, dict):
+                raise ValueError(f"{key}.transition 必须是对象。")
+            policy["transition"] = {
+                "next_phase": _text(transition_raw.get("next_phase"), f"{key}.transition.next_phase"),
+                "assessment": _text(transition_raw.get("assessment"), f"{key}.transition.assessment"),
+                "basis": _text(transition_raw.get("basis"), f"{key}.transition.basis"),
+            }
+        phase_policies[key] = policy
+
+    return {"as_of": rules_as_of, "sources": sources, "phase_policies": phase_policies}
+
+
+def identify_cycle_phase(
+    gdp_growth: float,
+    inflation: float,
+    gdp_trend: float,
+    inflation_trend: float,
+) -> dict[str, Any]:
+    """Classify supplied observations relative to supplied trend values."""
+    values = {
+        "gdp_growth": _number(gdp_growth, "gdp_growth"),
+        "inflation": _number(inflation, "inflation"),
+        "gdp_trend": _number(gdp_trend, "gdp_trend"),
+        "inflation_trend": _number(inflation_trend, "inflation_trend"),
     }
-    
-    return allocations.get(phase, allocations["复苏期"])
-
-
-def get_china_specific_factors() -> List[str]:
-    """中国市场特殊因素"""
-    return [
-        "政策调控：中国政策干预能力强，可能改变周期节奏",
-        "结构性转型：从投资驱动向消费驱动转型",
-        "房地产周期：房地产对经济和政策影响重大",
-        "外部环境：美联储政策、地缘政治影响"
-    ]
-
-
-def generate_cycle_analysis(gdp_growth: float, inflation: float, 
-                           gdp_trend: float, inflation_trend: float) -> Dict:
-    """生成周期分析"""
-    
-    cycle = identify_cycle_phase(gdp_growth, inflation, gdp_trend, inflation_trend)
-    allocation = get_asset_allocation(cycle["phase"])
-    
+    growth_up = values["gdp_growth"] >= values["gdp_trend"]
+    inflation_up = values["inflation"] >= values["inflation_trend"]
+    if growth_up and not inflation_up:
+        phase_key = "growth_up_inflation_down"
+    elif growth_up and inflation_up:
+        phase_key = "growth_up_inflation_up"
+    elif not growth_up and inflation_up:
+        phase_key = "growth_down_inflation_up"
+    else:
+        phase_key = "growth_down_inflation_down"
     return {
-        "analyzed_at": datetime.now().isoformat(),
-        "cycle": cycle,
-        "allocation": allocation,
-        "china_factors": get_china_specific_factors(),
-        "transition_probability": estimate_transition(cycle["phase"]),
-        "suggestions": generate_cycle_suggestions(cycle["phase"])
+        **values,
+        "growth_relative_to_trend": "at_or_above" if growth_up else "below",
+        "inflation_relative_to_trend": "at_or_above" if inflation_up else "below",
+        "phase_key": phase_key,
     }
 
 
-def estimate_transition(current_phase: str) -> Dict:
-    """估算周期转换概率"""
-    
-    transitions = {
-        "复苏期": {"next": "过热期", "probability": "高", "triggers": ["通胀抬头", "政策收紧"]},
-        "过热期": {"next": "滞胀期", "probability": "中", "triggers": ["增长放缓", "通胀高企"]},
-        "滞胀期": {"next": "衰退期", "probability": "中", "triggers": ["经济下滑", "政策放松"]},
-        "衰退期": {"next": "复苏期", "probability": "高", "triggers": ["政策见效", "库存见底"]}
+def generate_cycle_analysis(
+    gdp_growth: float,
+    inflation: float,
+    gdp_trend: float,
+    inflation_trend: float,
+    data_as_of: str,
+    sources: list[str],
+    rules: dict[str, Any],
+) -> dict[str, Any]:
+    data_as_of = _text(data_as_of, "data_as_of")
+    sources = _string_list(sources, "sources")
+    validated_rules = validate_cycle_rules(rules)
+    observation = identify_cycle_phase(gdp_growth, inflation, gdp_trend, inflation_trend)
+    phase_policy = validated_rules["phase_policies"][observation["phase_key"]]
+    return {
+        "analyzed_at": datetime.now(timezone.utc).isoformat(),
+        "data_as_of": data_as_of,
+        "sources": sources,
+        "rules_as_of": validated_rules["as_of"],
+        "rule_sources": validated_rules["sources"],
+        "observation": observation,
+        "phase": phase_policy,
+        "methodology": (
+            "把调用者提供的增长与通胀观测值分别同调用者提供的趋势值比较，"
+            "再按经审阅规则映射到四象限；配置与转向文字来自规则文件，不是脚本预测。"
+        ),
+        "limitations": [
+            "仅使用四个输入数值，未自动纳入 PMI、就业、信贷、政策或市场价格。",
+            "阶段标签和任何配置比例都是规则场景，不构成实时投资建议或收益承诺。",
+        ],
     }
-    
-    return transitions.get(current_phase, {"next": "不确定", "probability": "低"})
 
 
-def generate_cycle_suggestions(phase: str) -> List[str]:
-    """生成周期操作建议"""
-    
-    suggestions = {
-        "复苏期": [
-            "积极增配股票，把握上涨行情",
-            "关注早周期板块（金融、工业）",
-            "逐步降低债券配置",
-            "关注政策刺激方向"
-        ],
-        "过热期": [
-            "逐步获利了结股票",
-            "增配大宗商品抗通胀",
-            "关注央行政策转向信号",
-            "准备应对回调"
-        ],
-        "滞胀期": [
-            "降低股票仓位，保留现金",
-            "配置抗通胀资产（黄金、资源）",
-            "关注政策变化",
-            "等待周期转机"
-        ],
-        "衰退期": [
-            "增配债券，享受降息红利",
-            "关注防御性板块",
-            "准备抄底资金",
-            "等待复苏信号"
-        ]
-    }
-    
-    return suggestions.get(phase, ["观望为主"])
-
-
-def format_report(report: Dict) -> str:
-    """格式化周期分析报告（投资官六段式）"""
-    
-    c = report["cycle"]
-    a = report["allocation"]
-    t = report["transition_probability"]
-    
+def format_report(report: dict[str, Any]) -> str:
+    observation = report["observation"]
+    phase = report["phase"]
     lines = [
-        "=" * 60,
-        "经济周期分析报告（美林时钟）",
-        "=" * 60,
-        "",
-        "## 🧭 投资官视角",
-        "",
-        "### 一、核心结论",
-        f"【当前阶段】{c['color']} {c['phase']}",
-        f"【阶段特征】{c['description']}",
-        f"【GDP增速】{c['gdp_growth']}%（{c['gdp_vs_trend']}）",
-        f"【通胀水平】{c['inflation']}%（{c['inflation_level']}）",
-        "",
-        "### 二、背后逻辑",
-        "【阶段特征】",
+        "经济周期四象限场景",
+        f"数据时点：{report['data_as_of']}",
+        "数据来源：" + "；".join(report["sources"]),
+        f"规则时点：{report['rules_as_of']}",
+        "规则来源：" + "；".join(report["rule_sources"]),
+        f"阶段：{phase['label']}",
+        f"说明：{phase['description']}",
+        (
+            f"输入：增长 {observation['gdp_growth']}% / 趋势 {observation['gdp_trend']}%；"
+            f"通胀 {observation['inflation']}% / 趋势 {observation['inflation_trend']}%"
+        ),
+        "特征：" + "；".join(phase["characteristics"]),
     ]
-    
-    for char in c["characteristics"]:
-        lines.append(f"• {char}")
-    
-    lines.extend([
-        "",
-        f"【周期转换】下一阶段可能是{t['next']}（概率{t['probability']}）",
-        f"• 触发因素：{', '.join(t.get('triggers', []))}",
-        "",
-        "### 三、风险在哪里",
-        "⚠️ 周期判断可能滞后，实际经济已发生变化",
-        "⚠️ 政策干预可能改变周期节奏",
-        "⚠️ 外部冲击（地缘政治、金融危机）可能打乱周期",
-        "⚠️ 中国结构转型期，传统周期规律可能弱化",
-        "",
-        "### 四、适合谁",
-        "• 进行大类资产配置的机构投资者",
-        "• 希望把握经济周期投资机会的个人投资者",
-        "• 投资期限1-3年的中长期投资者",
-        "",
-        "### 五、操作策略",
-        "【大类资产配置】",
-        f"• 股票：{a['stocks']}% - {a['rationale']}",
-        f"• 债券：{a['bonds']}%",
-        f"• 大宗商品：{a['commodities']}%",
-        f"• 现金：{a['cash']}%",
-        "",
-        "【板块建议】",
-    ])
-    
-    if a.get("preferred_sectors"):
-        lines.append(f"• 推荐板块：{', '.join(a['preferred_sectors'])}")
-    if a.get("avoid_sectors"):
-        lines.append(f"• 规避板块：{', '.join(a['avoid_sectors'])}")
-    
-    lines.extend([
-        "",
-        "【操作建议】",
-    ])
-    
-    for suggestion in report["suggestions"]:
-        lines.append(f"✓ {suggestion}")
-    
-    lines.extend([
-        "",
-        "【中国市场特殊因素】",
-    ])
-    
-    for factor in report["china_factors"]:
-        lines.append(f"• {factor}")
-    
-    lines.extend([
-        "",
-        "### 六、如果判断错了",
-        "• 如周期判断错误，及时根据最新数据修正",
-        "• 如进入非预期阶段，快速调整资产配置",
-        "• 建议保留10-20%现金应对不确定性",
-        "• 设置资产再平衡机制，每季度检视一次",
-        "",
-        "=" * 60,
-        f"分析时间：{report['analyzed_at']}",
-        "=" * 60
-    ])
-    
+    if "allocation" in phase:
+        allocations = "，".join(f"{asset} {weight:g}%" for asset, weight in phase["allocation"].items())
+        lines.extend([f"规则场景配置：{allocations}", f"配置依据：{phase['allocation_basis']}"])
+    if "monitor" in phase:
+        lines.append("待监测：" + "；".join(phase["monitor"]))
+    if "transition" in phase:
+        transition = phase["transition"]
+        lines.append(
+            f"规则中的转向场景：{transition['next_phase']}；{transition['assessment']}；依据：{transition['basis']}"
+        )
+    lines.extend(["方法边界：" + report["methodology"], *["限制：" + item for item in report["limitations"]]])
     return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="周期判断器")
-    parser.add_argument("--gdp-growth", type=float, required=True,
-                       help="GDP增速(%)")
-    parser.add_argument("--inflation", type=float, required=True,
-                       help="通胀率(%)")
-    parser.add_argument("--gdp-trend", type=float, default=5.0,
-                       help="GDP趋势增速(%)")
-    parser.add_argument("--inflation-trend", type=float, default=2.0,
-                       help="通胀趋势(%)")
-    parser.add_argument("--output", type=str, help="输出JSON文件")
-    parser.add_argument("--json", action="store_true", help="JSON格式输出")
-    
-    args = parser.parse_args()
-    
-    report = generate_cycle_analysis(
-        args.gdp_growth,
-        args.inflation,
-        args.gdp_trend,
-        args.inflation_trend
-    )
-    
-    if args.json or args.output:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="经济周期四象限透明场景计算器")
+    parser.add_argument("--gdp-growth", type=float, required=True, help="已核验的增长指标（%）")
+    parser.add_argument("--inflation", type=float, required=True, help="已核验的通胀指标（%）")
+    parser.add_argument("--gdp-trend", type=float, required=True, help="同口径增长趋势/基准（%）")
+    parser.add_argument("--inflation-trend", type=float, required=True, help="同口径通胀趋势/基准（%）")
+    parser.add_argument("--data-as-of", required=True, help="观测数据时点")
+    parser.add_argument("--source", action="append", required=True, help="观测数据来源，可多次使用")
+    parser.add_argument("--rules", required=True, help="经用户审阅、带来源的四象限规则 JSON")
+    parser.add_argument("--output", help="输出 JSON 文件")
+    parser.add_argument("--json", action="store_true", help="输出 JSON")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        report = generate_cycle_analysis(
+            args.gdp_growth,
+            args.inflation,
+            args.gdp_trend,
+            args.inflation_trend,
+            args.data_as_of,
+            args.source,
+            load_json(args.rules),
+        )
         output = json.dumps(report, ensure_ascii=False, indent=2)
         if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(output)
-            print(f"报告已保存到: {args.output}")
-        else:
+            output_path = Path(args.output).expanduser().resolve()
+            output_path.write_text(output + "\n", encoding="utf-8")
+            print(f"报告已保存到: {output_path}")
+        elif args.json:
             print(output)
-    else:
-        print(format_report(report))
+        else:
+            print(format_report(report))
+        return 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        if args.json:
+            print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False))
+        else:
+            print(f"错误: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

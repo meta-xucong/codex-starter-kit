@@ -1,9 +1,6 @@
 ---
 name: excel-xlsx
-slug: excel-xlsx
-version: 1.0.1
 description: Read, write, and generate Excel files with correct types, dates, formulas, and cross-platform compatibility.
-changelog: Added Core Rules and modern skill structure
 ---
 
 ## Setup

@@ -1,7 +1,6 @@
 ---
 name: growth-analyst
 description: 数据驱动增长分析，复盘优化与策略迭代
-tags: [growth, analytics, data, strategy]
 ---
 
 # 增长分析师 - Growth Analyst

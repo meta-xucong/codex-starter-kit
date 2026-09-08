@@ -11,25 +11,44 @@
 - `runtime/`：Windows x64 / CPython 3.12 的直接依赖输入、传递依赖物化脚本和 wheelhouse 状态清单；不放二进制。
 - `config-fragments/`：无密钥的 Codex MCP、Skill gating 和连接配置模板。
 - `installer-pack/`：由脚本生成、可复制到其他电脑的完整能力包。
-- `scripts/`：构建、验收和安装脚本。
+- `scripts/`：构建、契约审计、配置渲染、验收和安装脚本。
+- `docs/CODEX-ADAPTATION-DEVELOPMENT.md`：本轮 Codex 适配的设计、改造步骤、测试矩阵与完成标准。
 
 ## 50 个 Skill 的最终状态
 
 | 状态 | 数量 | 含义 |
 |---|---:|---|
 | `core-ready` | 25 | 复制后即可使用工作流说明和 Codex 原生能力，默认安装 |
-| `auto-installable-runtime` | 15 | 需要 U 盘运行时安装器提供的 Python 3.12 和离线包 |
+| `auto-installable-runtime` | 14 | 需要 U 盘运行时安装器提供的 Python 3.12 和离线包 |
 | `guided-config` | 7 | 需要用户在连接向导中配置 API、MCP 或网络服务 |
-| `unsupported` | 3 | 当前没有可验证的兼容自动入口，保持禁用 |
+| `unsupported` | 4 | 当前没有可验证的兼容入口或再分发依据，保持禁用 |
 
-默认安装的是 25 个核心 Skill 和 7 个 Agent；要把全部 50 个 Skill 复制到本机：
+默认安装 25 个核心 Skill 和 7 个 Agent。安装其余可配置/可补运行时的 Skill（合计 46 个，仍排除 4 个
+unsupported）使用：
 
 ```powershell
 .\scripts\install-to-codex.ps1 -IncludeNonDefault
 ```
 
+只有在人工接受许可证和兼容风险后，才可再加 `-IncludeUnsupported` 将隔离审计源码也装入 Skill 根目录；
+它必须与 `-IncludeNonDefault` 同时使用。保留在能力包中不等于可安全启用或可合法再分发。
+
 完整逐项清单见 [`manifest/skill-audit.json`](manifest/skill-audit.json)，其中每个 Skill 都有原始状态、
 整改后状态、依赖类型、版本、健康检查、启用条件和失败降级说明。
+
+## 已知限制
+
+- 14 个 `auto-installable-runtime` Skill 的安装与健康检查契约已经完成，但公开仓库尚未携带已物化的 CPython 3.12
+  安装器和完整离线 wheelhouse；它们仍是 `installReady=false`。
+- 7 个 `guided-config` Skill 需要真实凭据、模型、端点、飞书租户权限或本地锁定 npm cache；默认不启用，本轮也没有
+  使用真实租户或付费 API 做端到端调用。
+- `canvas`、`healthcheck`、`node-connect`、`pdf-processing-toolkit` 共 4 个 Skill 保持禁用，分别受缺失运行时、
+  受控系统权限、设备后端协议和不可核验再分发许可限制。
+- 当前完整验收平台是 Windows x64、CPython 3.12 和 Codex CLI 0.147.0；Linux、macOS、Windows ARM64 及其他
+  Python ABI 尚未进入发布矩阵。
+- 外部行情、基金、政策、公告和第三方网关会变化；离线契约测试不等于真实数据源、真实权限、计费和生产环境验收。
+
+完整原因、风险、解除条件和使用前检查见 [`docs/KNOWN-LIMITATIONS.md`](docs/KNOWN-LIMITATIONS.md)。
 
 ## 7 个功能入口
 
@@ -65,6 +84,18 @@ Agent 文件安装到 `%USERPROFILE%\.codex\agents\`，Skill 安装到 `%USERPRO
 重载 Codex 或打开新任务即可读取新 Agent。完整调用词、能力边界和安全降级规则见
 [`manifest/agent-catalog.md`](manifest/agent-catalog.md)。
 
+## 数据与决策真实性边界
+
+宏观、A 股、基金、家庭资产配置和创业项目脚本统一采用三条规则：实时/外部数据必须带来源与时点，模型规则和市场
+假设必须由调用者显式提供，接口失败或关键字段不全必须给出完整性错误而不是模拟值或成功空结果。脚本可以整理原始
+字段、执行筛选和做可复算的场景计算，但不会把结果自动改写成买卖信号、产品推荐、风险评级、目标价、收益承诺或
+投/不投决定。
+
+A 股实时与 AkShare 批量入口会记录成功/失败组件；财务分析和报告模板不再内置固定 0–100 分、排名或行业均值占位。
+宏观周期/政策/情绪分别要求显式规则、原文证据和指标权重。基金与资产配置只换算用户审阅的模型，定投、风险、
+再平衡和收益追踪只计算显式场景。创业模型不判断“健康度”或推荐融资轮次，尽调脚本只生成法域/行业/交易结构明确且
+全部待人工核验的起点清单。真实交易、法律、税务、会计和证券判断始终留给用户及相应专业人士。
+
 ## Windows 安装
 
 安装能力包本身只需要 PowerShell，不要求目标机预装 Python、Node 或 Git：
@@ -75,7 +106,16 @@ Set-ExecutionPolicy -Scope Process Bypass
 ```
 
 安装器只写自己拥有的 Agent/Skill 文件，不覆盖已有同名文件，除非显式加 `-Overwrite`；不会删除其他 Agent、
-Skill 或全局 `AGENTS.md`。它会校验 `file-manifest.json` 与 `checksums.sha256`，并记录不含凭据的所有权清单。
+Skill 或全局 `AGENTS.md`。它会校验 `file-manifest.json` 与 `checksums.sha256`，部署本地 MCP wrapper、配置
+渲染器和兼容性审计器，并记录不含凭据的所有权清单与 readiness 报告。即使使用 `-Overwrite`，当前文件哈希
+与上次安装记录不一致或 Skill 内出现用户新增文件时也会保留并跳过；包内额外文件、符号链接或目录联接会被拒绝。
+生成包复制到目标机后，也可直接运行：
+
+```powershell
+.\install-to-codex.ps1
+```
+
+安装记录位于 `%USERPROFILE%\.codex\codex-agent-kit\`。安装成功只代表文件完整，不代表可选运行时或连接健康。
 
 ### 运行时策略
 
@@ -90,11 +130,24 @@ Skill 或全局 `AGENTS.md`。它会校验 `file-manifest.json` 与 `checksums.s
 
 三类内容分开管理：
 
-- MCP：当前只登记一个需向导配置的 `feishu` 服务，见 [`manifest/mcp-servers.json`](manifest/mcp-servers.json)。它必须使用已锁定的离线 npm cache 和本机凭据 wrapper，不能用 `npx --yes` 作为健康检查。
-- 直连 API：DashScope 网页搜索、图像服务、视频服务，见 [`manifest/api-services.json`](manifest/api-services.json)。
+- MCP：当前只登记一个需向导配置的 `feishu` 服务，见 [`manifest/mcp-servers.json`](manifest/mcp-servers.json)。它必须使用已锁定的离线 npm cache 和本机 wrapper；wrapper 只执行 cache 内的 `lark-mcp`，不调用 `npx` 或联网下载。
+- 直连 API：DashScope 网页搜索、图像服务、视频服务，见 [`manifest/api-services.json`](manifest/api-services.json)。DashScope 只接受 `compatible-mode/v1` 根地址，并要求显式填写当前可用的联网搜索模型；脚本自行拼接 `/chat/completions`，不保留猜测模型。
 - 连接字段：统一的密钥、端点、认证方式、校验和能力映射，见 [`manifest/connection-fields.json`](manifest/connection-fields.json)。
 
-模板在 `config-fragments/` 中，默认保持禁用；真实值只能写入本机私有配置或密钥管理器。没有健康检查通过时，
+Image-2 和 Seedance 都是用户明确选择后才启用的外部兼容网关，不是 Codex 原生能力。两者要求专用 API Key、
+根级 HTTPS 地址、实际模型和服务方给出的外部路由 ID；不得把 Codex 任务 ID 猜作 `agent-id`。Image-2 会锁定
+本地参考图哈希并限制远程下载地址/大小；Seedance 还要求显式配置当前预扣积分、返还规则和官方链接有效期，
+不再内置 `20000`、`24 小时` 等未经端点证明的值。任务数据默认进入项目 `codex-data/`，不写入 Skill 安装目录。
+
+模板在 `config-fragments/` 中，默认保持禁用。可先生成待人工合并的无密钥片段：
+
+```powershell
+.\scripts\render-codex-config.ps1 -OutputPath .\codex-starter.fragment.toml
+```
+
+启用飞书前，需在启动 Codex 的进程环境中提供 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，准备锁定的本地包 cache，
+并给渲染器传 `-EnableFeishu`。配置只保存环境变量名，不保存值；但官方 CLI 最终仍以子进程参数接收 Secret，
+本机高权限进程检查可能观察到它。当前官方实现不支持文件上传、下载和直接编辑云文档正文。没有健康检查通过时，
 Agent 只能输出配置步骤或无连接降级结果，不能声称已经访问外部服务。
 
 ## 构建和验收
@@ -103,12 +156,14 @@ Agent 只能输出配置步骤或无连接降级结果，不能声称已经访�
 
 ```powershell
 python .\scripts\build-pack.py --check
+python .\scripts\audit-codex-compatibility.py --root . --require-codex
 .\scripts\verify-package.ps1
 ```
 
-验收会重建包，并检查 50 个 Skill、7 个 Agent、依赖闭包、非核心 Skill 的显式门控、运行时/MCP/API 清单、
-PowerShell/Python/TOML 语法、哈希、路径安全、旧平台标记、疑似密钥，以及天气/复盘/技能搜索/运行时探测的
-安全烟测。
+验收会重建包，并检查 50 个 Skill、7 个 Agent、当前 Codex 版本、依赖闭包、非核心 Skill 的显式门控、
+运行时/MCP/API 清单、PowerShell/Python/TOML 语法、哈希、路径安全、旧工具名和疑似密钥；还会执行飞书
+wrapper 脱敏 dry-run、配置渲染、DashScope/Image-2/Seedance 与高时效金融脚本的无网络契约回归、网页抓取帮助入口、天气/复盘/公众号草稿写入边界/技能搜索/运行时探测，以及临时用户目录中的
+隔离安装 smoke test。完整实施依据见 [`docs/CODEX-ADAPTATION-DEVELOPMENT.md`](docs/CODEX-ADAPTATION-DEVELOPMENT.md)。
 
 新增能力时遵循 `installer-pack/pack.json` 的扩展契约：登记 Skill 或 Agent 及其依赖，MCP/API 与连接字段
 分开登记，运行时只提交锁文件和可审计元数据，然后重新构建和验收。

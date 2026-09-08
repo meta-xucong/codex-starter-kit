@@ -1,7 +1,6 @@
 ---
 name: offer-designer
 description: 设计高转化产品定位、定价策略与商业模式
-tags: [growth, product, pricing, strategy]
 ---
 
 # Offer 设计师 - Offer Designer

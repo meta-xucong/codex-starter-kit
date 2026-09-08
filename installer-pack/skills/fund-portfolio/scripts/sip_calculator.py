@@ -13,6 +13,8 @@ Usage:
 
 import argparse
 import json
+import math
+import sys
 from datetime import datetime
 from typing import Dict, List
 
@@ -22,7 +24,13 @@ def calculate_regular_sip(
     years: int,
     annual_return: float
 ) -> Dict:
-    """计算普通定投收益"""
+    """按调用者给出的年化收益假设计算普通定投场景。"""
+    if not math.isfinite(monthly_amount) or monthly_amount <= 0:
+        raise ValueError("monthly_amount 必须是正数。")
+    if not isinstance(years, int) or not 1 <= years <= 100:
+        raise ValueError("years 必须是 1 到 100 的整数。")
+    if not math.isfinite(annual_return) or not -100 < annual_return <= 1000:
+        raise ValueError("annual_return 必须大于 -100% 且不超过 1000%。")
     months = years * 12
     monthly_rate = annual_return / 100 / 12
     
@@ -58,6 +66,7 @@ def calculate_regular_sip(
         "years": years,
         "total_months": months,
         "annual_return": annual_return,
+        "scenario_notice": "年化收益率是调用者显式提供的场景假设，不是历史数据或收益预测。",
         "total_invested": total_invested,
         "future_value": future_value,
         "total_return": total_return,
@@ -69,31 +78,27 @@ def calculate_regular_sip(
 def calculate_smart_sip(
     monthly_amount: float,
     years: int,
-    base_return: float
+    base_return: float,
+    smart_return: float,
 ) -> Dict:
-    """计算智能定投收益（简化模型）"""
-    # 智能定投假设：低位多投20%，高位少投20%
-    # 平均效果比普通定投好约10-15%
-    
+    """比较两个由调用者显式给出的收益率场景。"""
     regular_result = calculate_regular_sip(monthly_amount, years, base_return)
-    
-    # 假设智能定投能提升15%收益
-    enhanced_return = base_return * 1.15
-    enhanced_result = calculate_regular_sip(monthly_amount, years, enhanced_return)
+    enhanced_result = calculate_regular_sip(monthly_amount, years, smart_return)
     
     return {
         "strategy": "智能定投",
-        "description": "低位多投、高位少投策略",
+        "description": "调用者定义的智能定投收益率场景，与普通定投场景比较",
         "monthly_amount": monthly_amount,
         "years": years,
         "base_annual_return": base_return,
-        "expected_annual_return": enhanced_return,
+        "smart_scenario_annual_return": smart_return,
         "total_invested": regular_result["total_invested"],
         "future_value": enhanced_result["future_value"],
         "total_return": enhanced_result["total_return"],
         "return_rate": enhanced_result["return_rate"],
         "advantage_vs_regular": enhanced_result["future_value"] - regular_result["future_value"],
-        "advantage_rate": ((enhanced_result["future_value"] / regular_result["future_value"]) - 1) * 100
+        "advantage_rate": ((enhanced_result["future_value"] / regular_result["future_value"]) - 1) * 100,
+        "scenario_notice": "两个收益率均为显式场景假设；脚本不假设智能定投必然提高收益。",
     }
 
 
@@ -109,42 +114,40 @@ def format_report(result: Dict) -> str:
         f"【定投期限】{result['years']} 年（{result['total_months']}期）",
         "",
         "-" * 60,
-        "预期收益测算",
+        "收益率假设下的场景测算",
         "-" * 60,
         f"累计投入：{result['total_invested']:,.0f} 元",
-        f"预期市值：{result['future_value']:,.0f} 元",
-        f"预期收益：{result['total_return']:+,.0f} 元（{result['return_rate']:+.1f}%）",
+        f"场景期末市值：{result['future_value']:,.0f} 元",
+        f"场景收益：{result['total_return']:+,.0f} 元（{result['return_rate']:+.1f}%）",
     ]
     
     if "advantage_vs_regular" in result:
         lines.extend([
             "",
-            f"比普通定投多赚：{result['advantage_vs_regular']:,.0f} 元",
-            f"收益提升：{result['advantage_rate']:.1f}%",
+            f"相对普通场景差额：{result['advantage_vs_regular']:,.0f} 元",
+            f"相对场景差异：{result['advantage_rate']:.1f}%",
         ])
     
     lines.extend([
         "",
         "-" * 60,
-        "投资官建议",
+        "模型边界",
         "-" * 60,
-        "✓ 最佳扣款日：每月1日或发薪日后3天",
-        "✓ 止盈策略：年化收益达到15%时考虑部分止盈",
-        "✓ 止损策略：单笔定投亏损30%时暂停，检视标的",
-        "✓ 坚持纪律：至少坚持3年，避免频繁更换标的",
-        "",
-        "⚠️ 风险提示：以上测算基于历史数据，实际收益可能不同",
+        f"• {result['scenario_notice']}",
+        "• 未计入申赎费、税费、通胀、收益波动和定投时点差异。",
+        "• 不能据此断言智能定投优于普通定投，也不构成投资建议。",
         "=" * 60,
     ])
     
     return "\n".join(lines)
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="定投计算器")
     parser.add_argument("--monthly", type=float, required=True, help="每月定投金额")
     parser.add_argument("--years", type=int, required=True, help="定投年限")
-    parser.add_argument("--expected-return", type=float, default=8, help="预期年化收益率（%）")
+    parser.add_argument("--expected-return", type=float, required=True, help="普通定投场景年化收益率假设（%）")
+    parser.add_argument("--smart-expected-return", type=float, help="智能定投场景年化收益率假设（%）")
     parser.add_argument("--strategy", type=str, default="普通定投", 
                        choices=["普通定投", "智能定投"],
                        help="定投策略")
@@ -153,22 +156,32 @@ def main():
     
     args = parser.parse_args()
     
-    if args.strategy == "智能定投":
-        result = calculate_smart_sip(args.monthly, args.years, args.expected_return)
-    else:
-        result = calculate_regular_sip(args.monthly, args.years, args.expected_return)
-    
-    if args.json or args.output:
-        output = json.dumps(result, ensure_ascii=False, indent=2)
-        if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(output)
-            print(f"报告已保存到: {args.output}")
+    try:
+        if args.strategy == "智能定投":
+            if args.smart_expected_return is None:
+                raise ValueError("智能定投比较必须显式提供 --smart-expected-return。")
+            result = calculate_smart_sip(args.monthly, args.years, args.expected_return, args.smart_expected_return)
         else:
-            print(output)
-    else:
-        print(format_report(result))
+            result = calculate_regular_sip(args.monthly, args.years, args.expected_return)
+
+        if args.json or args.output:
+            output = json.dumps(result, ensure_ascii=False, indent=2)
+            if args.output:
+                with open(args.output, 'w', encoding='utf-8') as f:
+                    f.write(output)
+                print(f"报告已保存到: {args.output}")
+            else:
+                print(output)
+        else:
+            print(format_report(result))
+        return 0
+    except (OSError, ValueError) as error:
+        if args.json:
+            print(json.dumps({"error": str(error)}, ensure_ascii=False))
+        else:
+            print(f"定投场景计算失败：{error}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -10,6 +10,14 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 
+def resolve_article_data_dir() -> Path:
+    explicit = str(os.environ.get("WECHAT_ARTICLE_DATA_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    root = Path(os.environ.get("CODEX_DATA_DIR", Path.cwd() / "codex-data"))
+    return (root.expanduser() / "wechat-article-creator").resolve()
+
+
 def get_default_colors(style: str) -> dict:
     """Get color palette by style"""
     palettes = {
@@ -62,6 +70,10 @@ def generate_cover(
     output_path: str = None
 ):
     """Generate a WeChat article cover image"""
+    if not (256 <= width <= 8192 and 256 <= height <= 8192):
+        raise ValueError("width 和 height 必须在 256 到 8192 之间。")
+    if width * height > 40_000_000:
+        raise ValueError("图片总像素不得超过 4000 万。")
     # Get colors
     default_colors = get_default_colors(style)
     if colors:
@@ -200,11 +212,21 @@ def generate_cover(
     
     # Save image
     if output_path is None:
-        output_dir = Path(__file__).parent.parent / "output" / "covers"
+        output_dir = resolve_article_data_dir() / "covers"
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"cover_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        output_path = output_dir / f"cover_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.jpg"
+    else:
+        output_path = Path(output_path).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    img.save(output_path, "JPEG", quality=95)
+    output_path = Path(output_path).resolve()
+    suffix = output_path.suffix.casefold()
+    if suffix in {".jpg", ".jpeg"}:
+        img.save(output_path, "JPEG", quality=95)
+    elif suffix == ".png":
+        img.save(output_path, "PNG", optimize=True)
+    else:
+        raise ValueError("--output 只支持 .jpg、.jpeg 或 .png 扩展名。")
     print(f"[OK] Cover generated: {output_path}")
     return str(output_path)
 

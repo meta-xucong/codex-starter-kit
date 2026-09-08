@@ -33,6 +33,7 @@ codex-data/
 
 # Local deployment output
 .codex/
+.codex-longrun/
 dist/
 tmp/
 

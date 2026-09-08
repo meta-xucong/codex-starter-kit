@@ -1,409 +1,529 @@
 #!/usr/bin/env python
-"""
-A股数据获取模块
-使用akshare获取股票财务数据、行情数据、股东信息等
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["akshare", "pandas"]
+# ///
+"""Fetch attributed A-share data through pinned AkShare interfaces."""
 
-依赖: pip install akshare pandas
-"""
+from __future__ import annotations
 
 import argparse
+import importlib
 import json
+import math
+import os
+import re
 import sys
 import time
-import os
-from datetime import datetime, timedelta
-from typing import Optional, Callable
-from functools import wraps
-
-try:
-    import akshare as ak
-    import pandas as pd
-except ImportError:
-    print("错误: 请先安装依赖库")
-    print("pip install akshare pandas")
-    sys.exit(1)
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Callable
 
 
-def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
-    """网络请求重试装饰器"""
-    def decorator(func: Callable):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_error = None
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    last_error = e
-                    if attempt < max_retries - 1:
-                        time.sleep(delay * (attempt + 1))  # 递增等待
-            return {"error": f"重试{max_retries}次后失败: {str(last_error)}"}
-        return wrapper
-    return decorator
+MAX_CODES = 100
+MAX_CACHE_BYTES = 20 * 1024 * 1024
+DATA_TYPES = ("all", "basic", "financial", "valuation", "holder")
+INDEX_CODES = {
+    "hs300": "000300",
+    "zz500": "000905",
+    "zz1000": "000852",
+    "cyb": "399006",
+    "kcb": "000688",
+}
 
 
-def safe_float(value) -> Optional[float]:
-    """安全转换为浮点数"""
-    if value is None or value == '' or value == '--':
-        return None
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _provider() -> Any:
     try:
-        if pd.isna(value):
-            return None
-        if isinstance(value, str):
-            value = value.replace('%', '').replace(',', '').replace('亿', '')
-        return float(value)
-    except (ValueError, TypeError):
+        return importlib.import_module("akshare")
+    except ImportError as exc:
+        raise RuntimeError("缺少锁定依赖 akshare；请先运行安装包运行时检查。") from exc
+
+
+def _validate_code(raw_code: str) -> str:
+    code = str(raw_code or "").strip()
+    if not re.fullmatch(r"\d{6}", code):
+        raise ValueError(f"股票代码必须是六位数字：{raw_code!r}")
+    if not code.startswith(("0", "3", "4", "6", "8")):
+        raise ValueError(f"无法识别股票代码所属市场：{code}")
+    return code
+
+
+def safe_float(value: Any) -> float | None:
+    if value is None or value == "" or value == "--":
         return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.replace("%", "").replace(",", "").replace("亿", "").strip()
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
 
 
-def get_cache_path(code: str, data_type: str) -> str:
-    """获取缓存文件路径"""
-    cache_dir = os.path.join(os.path.dirname(__file__), '.cache')
-    os.makedirs(cache_dir, exist_ok=True)
-    today = datetime.now().strftime('%Y%m%d')
-    return os.path.join(cache_dir, f"{code}_{data_type}_{today}.json")
+def _records(frame: Any, *, limit: int | None = None) -> list[dict[str, Any]]:
+    if frame is None or bool(getattr(frame, "empty", False)):
+        return []
+    selected = frame.head(limit) if limit is not None else frame
+    try:
+        records = selected.to_dict(orient="records")
+    except Exception as exc:
+        raise RuntimeError("数据接口返回值不是可识别的表格。") from exc
+    if not isinstance(records, list) or not all(isinstance(row, dict) for row in records):
+        raise RuntimeError("数据接口返回值不是记录数组。")
+    return records
 
 
-def load_cache(code: str, data_type: str) -> Optional[dict]:
-    """加载缓存数据（当天有效）"""
-    cache_path = get_cache_path(code, data_type)
-    if os.path.exists(cache_path):
+def _retry(call: Callable[[], Any], interface: str, attempts: int = 2) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(attempts):
         try:
-            with open(cache_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return None
-    return None
+            return call()
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                time.sleep(0.1 * (attempt + 1))
+    raise RuntimeError(f"{interface} 接口在 {attempts} 次尝试后失败：{last_error}") from last_error
 
 
-def save_cache(code: str, data_type: str, data: dict):
-    """保存缓存数据"""
-    cache_path = get_cache_path(code, data_type)
+def _cache_directory() -> Path:
+    explicit = str(os.environ.get("CHINA_STOCK_CACHE_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    data_root = Path(os.environ.get("CODEX_DATA_DIR", Path.cwd() / "codex-data")).expanduser().resolve()
+    return (data_root / "china-stock-analysis" / "cache").resolve()
+
+
+def get_cache_path(code: str, data_type: str) -> Path:
+    code = _validate_code(code)
+    if data_type not in DATA_TYPES:
+        raise ValueError(f"不支持的数据类型：{data_type}")
+    directory = _cache_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{code}_{data_type}_{datetime.now().strftime('%Y%m%d')}.json"
+
+
+def load_cache(code: str, data_type: str) -> dict[str, Any] | None:
+    path = get_cache_path(code, data_type)
+    if not path.is_file() or path.stat().st_size > MAX_CACHE_BYTES:
+        return None
     try:
-        with open(cache_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, default=str)
-    except IOError:
-        pass
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("completeness", {}).get("status") != "complete":
+        return None
+    payload = dict(payload)
+    payload["cache"] = {"hit": True, "path": str(path)}
+    return payload
 
 
-@retry_on_failure(max_retries=2, delay=1.0)
-def get_stock_info(code: str) -> dict:
-    """获取股票基本信息"""
+def save_cache(code: str, data_type: str, payload: dict[str, Any]) -> None:
+    if payload.get("completeness", {}).get("status") != "complete":
+        return
+    path = get_cache_path(code, data_type)
+    temporary = path.with_suffix(path.suffix + ".tmp")
     try:
-        df = ak.stock_individual_info_em(symbol=code)
-        info = {}
-        for _, row in df.iterrows():
-            info[row['item']] = row['value']
-        return {
-            "code": code,
-            "name": info.get("股票简称", ""),
-            "industry": info.get("行业", ""),
-            "market_cap": safe_float(info.get("总市值")),
-            "float_cap": safe_float(info.get("流通市值")),
-            "total_shares": safe_float(info.get("总股本")),
-            "float_shares": safe_float(info.get("流通股")),
-            "pe_ttm": safe_float(info.get("市盈率(动态)")),
-            "pb": safe_float(info.get("市净率")),
-            "listing_date": info.get("上市时间", "")
-        }
-    except Exception as e:
-        return {"code": code, "error": str(e)}
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
+        temporary.replace(path)
+    except OSError as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RuntimeError(f"缓存写入失败：{exc}") from exc
 
 
-@retry_on_failure(max_retries=2, delay=1.0)
-def get_financial_data(code: str, years: int = 3) -> dict:
-    """获取财务数据（资产负债表、利润表、现金流量表）"""
-    max_records = min(years * 4, 12)
-    result = {
-        "balance_sheet": [],
-        "income_statement": [],
-        "cash_flow": []
+def get_stock_info(code: str, provider: Any) -> dict[str, Any]:
+    interface = "akshare.stock_individual_info_em"
+    frame = _retry(lambda: provider.stock_individual_info_em(symbol=code), interface)
+    rows = _records(frame)
+    if not rows:
+        raise RuntimeError(f"{interface} 没有返回记录。")
+    info = {str(row.get("item", "")): row.get("value") for row in rows}
+    return {
+        "code": code,
+        "name": str(info.get("股票简称") or ""),
+        "industry": str(info.get("行业") or ""),
+        "market_cap": safe_float(info.get("总市值")),
+        "float_cap": safe_float(info.get("流通市值")),
+        "total_shares": safe_float(info.get("总股本")),
+        "float_shares": safe_float(info.get("流通股")),
+        "pe_ttm": safe_float(info.get("市盈率(动态)")),
+        "pb": safe_float(info.get("市净率")),
+        "listing_date": str(info.get("上市时间") or ""),
+        "source_interface": interface,
     }
 
-    fetch_configs = [
-        ("balance_sheet", ak.stock_balance_sheet_by_report_em),
-        ("income_statement", ak.stock_profit_sheet_by_report_em),
-        ("cash_flow", ak.stock_cash_flow_sheet_by_report_em),
-    ]
 
-    for key, fetch_func in fetch_configs:
+def get_financial_data(code: str, years: int, provider: Any) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    max_records = min(years * 4, 40)
+    configurations = (
+        ("balance_sheet", "stock_balance_sheet_by_report_em"),
+        ("income_statement", "stock_profit_sheet_by_report_em"),
+        ("cash_flow", "stock_cash_flow_sheet_by_report_em"),
+    )
+    data: dict[str, Any] = {}
+    errors: list[dict[str, str]] = []
+    for key, method_name in configurations:
+        interface = f"akshare.{method_name}"
         try:
-            df = fetch_func(symbol=code)
-            if df is not None and not df.empty:
-                result[key] = df.head(max_records).to_dict(orient='records')
-        except Exception as e:
-            result[f"{key}_error"] = str(e)
+            method = getattr(provider, method_name)
+            rows = _records(_retry(lambda method=method: method(symbol=code), interface), limit=max_records)
+            if not rows:
+                raise RuntimeError(f"{interface} 没有返回记录。")
+            data[key] = rows
+            data[f"{key}_source_interface"] = interface
+        except (AttributeError, RuntimeError) as exc:
+            errors.append({"component": key, "error": str(exc)})
+    return data, errors
 
-    return result
 
-
-def get_financial_indicators(code: str, limit: int = 8) -> dict:
-    """获取财务指标，优先使用快速API，失败时降级到备用API"""
-    apis = [ak.stock_financial_abstract, ak.stock_financial_analysis_indicator]
-
-    for api in apis:
+def get_financial_indicators(code: str, provider: Any, limit: int = 8) -> dict[str, Any]:
+    failures: list[str] = []
+    for method_name in ("stock_financial_abstract", "stock_financial_analysis_indicator"):
+        interface = f"akshare.{method_name}"
         try:
-            df = api(symbol=code)
-            if df is not None and not df.empty:
-                return df.head(limit).to_dict(orient='records')
-        except Exception:
+            method = getattr(provider, method_name)
+            rows = _records(_retry(lambda method=method: method(symbol=code), interface), limit=limit)
+            if rows:
+                return {"records": rows, "source_interface": interface}
+            failures.append(f"{interface} 没有返回记录")
+        except (AttributeError, RuntimeError) as exc:
+            failures.append(str(exc))
+    raise RuntimeError("财务指标接口均不可用：" + "；".join(failures))
+
+
+def get_valuation_data(code: str, provider: Any) -> dict[str, Any]:
+    interface = "akshare.stock_a_ttm_lyr"
+    frame = _retry(lambda: provider.stock_a_ttm_lyr(symbol=code), interface)
+    rows = _records(frame)
+    if not rows:
+        raise RuntimeError(f"{interface} 没有返回记录。")
+    latest = rows[-1]
+    result: dict[str, Any] = {
+        "latest": latest,
+        "history_count": len(rows),
+        "source_interface": interface,
+    }
+    columns = getattr(frame, "columns", [])
+    for field in ("pe_ttm", "pb"):
+        if field not in columns:
             continue
-
-    return []
-
-
-def get_valuation_data(code: str) -> dict:
-    """获取估值数据"""
-    result = {}
-
-    try:
-        df = ak.stock_a_ttm_lyr(symbol=code)
-        if df is None or df.empty:
-            return result
-
-        latest = df.iloc[-1].to_dict()
-        result["latest"] = latest
-        result["history_count"] = len(df)
-
-        for col in ['pe_ttm', 'pb']:
-            val = latest.get(col)
-            if val and not pd.isna(val):
-                result[f"{col}_percentile"] = (df[col].dropna() < val).mean() * 100
-
-    except Exception as e:
-        result["error"] = str(e)
-        result["note"] = "估值历史数据获取失败，将使用基本信息中的估值"
-
+        values = [safe_float(row.get(field)) for row in rows]
+        values = [value for value in values if value is not None]
+        current = safe_float(latest.get(field))
+        if values and current is not None:
+            result[f"{field}_percentile"] = round(sum(value < current for value in values) / len(values) * 100, 6)
     return result
 
 
-@retry_on_failure(max_retries=2, delay=1.0)
-def get_holder_data(code: str) -> dict:
-    """获取股东信息"""
-    result = {}
-
-    try:
-        df_top10 = ak.stock_gdfx_top_10_em(symbol=code)
-        if df_top10 is not None and not df_top10.empty:
-            result["top_10_holders"] = df_top10.head(10).to_dict(orient='records')
-    except Exception as e:
-        result["top_10_holders_error"] = str(e)
-
-    try:
-        df_holder_num = ak.stock_zh_a_gdhs(symbol=code)
-        if df_holder_num is not None and not df_holder_num.empty:
-            result["holder_count_history"] = df_holder_num.head(10).to_dict(orient='records')
-    except Exception as e:
-        result["holder_count_error"] = str(e)
-
-    return result
-
-
-@retry_on_failure(max_retries=2, delay=1.0)
-def get_dividend_data(code: str) -> dict:
-    """获取分红数据，优先使用主API，失败时降级到备用API"""
-    apis = [
-        lambda c: ak.stock_dividend_cninfo(symbol=c),
-        lambda c: ak.stock_history_dividend_detail(symbol=c, indicator="分红"),
-    ]
-
-    for api in apis:
+def get_holder_data(code: str, provider: Any) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    configurations = (
+        ("top_10_holders", "stock_gdfx_top_10_em", 10),
+        ("holder_count_history", "stock_zh_a_gdhs", 10),
+    )
+    data: dict[str, Any] = {}
+    errors: list[dict[str, str]] = []
+    for key, method_name, limit in configurations:
+        interface = f"akshare.{method_name}"
         try:
-            df = api(code)
-            if df is not None and not df.empty:
-                return {
-                    "dividend_history": df.to_dict(orient='records'),
-                    "dividend_count": len(df)
-                }
-        except Exception:
-            continue
+            method = getattr(provider, method_name)
+            rows = _records(_retry(lambda method=method: method(symbol=code), interface), limit=limit)
+            if not rows:
+                raise RuntimeError(f"{interface} 没有返回记录。")
+            data[key] = rows
+            data[f"{key}_source_interface"] = interface
+        except (AttributeError, RuntimeError) as exc:
+            errors.append({"component": key, "error": str(exc)})
+    return data, errors
 
-    return {"dividend_history": [], "dividend_count": 0}
 
-
-@retry_on_failure(max_retries=2, delay=1.0)
-def get_price_data(code: str, days: int = 60) -> dict:
-    """获取价格数据"""
-    try:
-        end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
-
-        df = ak.stock_zh_a_hist(symbol=code, period="daily",
-                                start_date=start_date, end_date=end_date, adjust="qfq")
-        if df is not None and not df.empty:
-            latest = df.iloc[-1]
+def get_dividend_data(code: str, provider: Any) -> dict[str, Any]:
+    failures: list[str] = []
+    for method_name, kwargs in (
+        ("stock_dividend_cninfo", {"symbol": code}),
+        ("stock_history_dividend_detail", {"symbol": code, "indicator": "分红"}),
+    ):
+        interface = f"akshare.{method_name}"
+        try:
+            method = getattr(provider, method_name)
+            rows = _records(_retry(lambda method=method, kwargs=kwargs: method(**kwargs), interface))
             return {
-                "latest_price": safe_float(latest['收盘']),
-                "latest_date": str(latest['日期']),
-                "price_change_pct": safe_float(latest['涨跌幅']),
-                "volume": safe_float(latest['成交量']),
-                "turnover": safe_float(latest['成交额']),
-                "high_60d": safe_float(df['最高'].max()),
-                "low_60d": safe_float(df['最低'].min()),
-                "avg_volume_20d": safe_float(df.tail(20)['成交量'].mean()),
-                "price_data": df.tail(30).to_dict(orient='records')  # 只保留30天
+                "dividend_history": rows,
+                "dividend_count": len(rows),
+                "source_interface": interface,
+                "provider_returned_empty": not rows,
             }
-        return {}
-    except Exception as e:
-        return {"error": str(e)}
+        except (AttributeError, RuntimeError) as exc:
+            failures.append(str(exc))
+    raise RuntimeError("分红接口均不可用：" + "；".join(failures))
 
 
-@retry_on_failure(max_retries=2, delay=1.0)
-def get_index_constituents(index_name: str) -> list:
-    """获取指数成分股"""
-    index_map = {
-        "hs300": "000300",
-        "zz500": "000905",
-        "zz1000": "000852",
-        "cyb": "399006",
-        "kcb": "000688"
+def get_price_data(code: str, days: int, provider: Any) -> dict[str, Any]:
+    interface = "akshare.stock_zh_a_hist"
+    end_date = datetime.now().strftime("%Y%m%d")
+    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+    frame = _retry(
+        lambda: provider.stock_zh_a_hist(
+            symbol=code,
+            period="daily",
+            start_date=start_date,
+            end_date=end_date,
+            adjust="qfq",
+        ),
+        interface,
+    )
+    rows = _records(frame)
+    if not rows:
+        raise RuntimeError(f"{interface} 没有返回记录。")
+    required = {"日期", "收盘", "最高", "最低", "成交量", "成交额"}
+    missing = sorted(required - set(rows[-1]))
+    if missing:
+        raise RuntimeError(f"{interface} 缺少字段：{', '.join(missing)}")
+    latest = rows[-1]
+    highs = [safe_float(row.get("最高")) for row in rows]
+    lows = [safe_float(row.get("最低")) for row in rows]
+    volumes = [safe_float(row.get("成交量")) for row in rows[-20:]]
+    highs = [value for value in highs if value is not None]
+    lows = [value for value in lows if value is not None]
+    volumes = [value for value in volumes if value is not None]
+    return {
+        "latest_price": safe_float(latest.get("收盘")),
+        "latest_date": str(latest.get("日期")),
+        "price_change_percent": safe_float(latest.get("涨跌幅")),
+        "volume": safe_float(latest.get("成交量")),
+        "turnover": safe_float(latest.get("成交额")),
+        "sample_high": max(highs) if highs else None,
+        "sample_low": min(lows) if lows else None,
+        "average_volume_last_20_records": sum(volumes) / len(volumes) if volumes else None,
+        "price_data": rows[-30:],
+        "adjustment": "qfq",
+        "requested_calendar_days": days,
+        "source_interface": interface,
     }
 
-    index_code = index_map.get(index_name)
-    if not index_code:
-        return []
 
-    try:
-        df = ak.index_stock_cons(symbol=index_code)
-        if df is not None and not df.empty:
-            return df['品种代码'].tolist()
-        return []
-    except Exception as e:
-        print(f"获取指数成分股失败: {e}")
-        return []
-
-
-def get_all_a_stocks() -> list:
-    """获取全部A股代码"""
-    try:
-        df = ak.stock_zh_a_spot_em()
-        if df is not None and not df.empty:
-            return df['代码'].tolist()
-        return []
-    except Exception as e:
-        print(f"获取全部A股失败: {e}")
-        return []
+def get_index_constituents(index_name: str, provider: Any) -> list[str]:
+    if index_name not in INDEX_CODES:
+        raise ValueError(f"不支持的指数范围：{index_name}")
+    interface = "akshare.index_stock_cons"
+    frame = _retry(lambda: provider.index_stock_cons(symbol=INDEX_CODES[index_name]), interface)
+    rows = _records(frame)
+    codes = [str(row.get("品种代码") or "").strip() for row in rows]
+    codes = [code for code in codes if re.fullmatch(r"\d{6}", code)]
+    if not codes:
+        raise RuntimeError(f"{interface} 没有返回有效成分股代码。")
+    return codes
 
 
-def fetch_stock_data(code: str, data_type: str = "all", years: int = 3, use_cache: bool = True) -> dict:
-    """获取单只股票的数据"""
-    # 尝试加载缓存
+def get_all_a_stocks(provider: Any) -> list[str]:
+    interface = "akshare.stock_zh_a_spot_em"
+    rows = _records(_retry(provider.stock_zh_a_spot_em, interface))
+    codes = [str(row.get("代码") or "").strip() for row in rows]
+    codes = [code for code in codes if re.fullmatch(r"\d{6}", code)]
+    if not codes:
+        raise RuntimeError(f"{interface} 没有返回有效股票代码。")
+    return codes
+
+
+def _requested_components(data_type: str) -> list[str]:
+    mapping = {
+        "basic": ["basic_info"],
+        "financial": ["financial_data", "financial_indicators"],
+        "valuation": ["valuation", "price"],
+        "holder": ["holder", "dividend"],
+    }
+    if data_type == "all":
+        return [component for key in ("basic", "financial", "valuation", "holder") for component in mapping[key]]
+    return mapping[data_type]
+
+
+def fetch_stock_data(
+    code: str,
+    data_type: str = "all",
+    years: int = 3,
+    use_cache: bool = True,
+    *,
+    provider: Any | None = None,
+) -> dict[str, Any]:
+    code = _validate_code(code)
+    if data_type not in DATA_TYPES:
+        raise ValueError(f"不支持的数据类型：{data_type}")
+    if not 1 <= years <= 10:
+        raise ValueError("years 必须在 1–10 之间。")
     if use_cache:
         cached = load_cache(code, data_type)
-        if cached:
-            print(f"使用缓存数据: {code}")
+        if cached is not None:
             return cached
-
-    result = {
+    provider = provider or _provider()
+    requested = _requested_components(data_type)
+    interfaces: set[str] = set()
+    errors: list[dict[str, str]] = []
+    result: dict[str, Any] = {
+        "schema_version": 2,
         "code": code,
-        "fetch_time": datetime.now().isoformat(),
-        "data_type": data_type
+        "data_type": data_type,
+        "retrieved_at_utc": _utc_now(),
+        "provider": "AkShare",
+        "provider_version": str(getattr(provider, "__version__", "unknown")),
+        "requested_components": requested,
+        "cache": {"hit": False},
     }
 
-    print(f"正在获取 {code} 的数据...")
-
-    if data_type in ["all", "basic"]:
-        print("  - 获取基本信息...")
-        result["basic_info"] = get_stock_info(code)
-
-    if data_type in ["all", "financial"]:
-        print("  - 获取财务数据...")
-        result["financial_data"] = get_financial_data(code, years)
-        print("  - 获取财务指标...")
-        result["financial_indicators"] = get_financial_indicators(code)
-
-    if data_type in ["all", "valuation"]:
-        print("  - 获取估值数据...")
-        result["valuation"] = get_valuation_data(code)
-        print("  - 获取价格数据...")
-        result["price"] = get_price_data(code)
-
-    if data_type in ["all", "holder"]:
-        print("  - 获取股东数据...")
-        result["holder"] = get_holder_data(code)
-        print("  - 获取分红数据...")
-        result["dividend"] = get_dividend_data(code)
-
-    # 保存缓存
-    if use_cache:
-        save_cache(code, data_type, result)
-
-    print(f"数据获取完成: {code}")
-    return result
-
-
-def fetch_multiple_stocks(codes: list, data_type: str = "basic") -> dict:
-    """获取多只股票数据"""
-    result = {
-        "fetch_time": datetime.now().isoformat(),
-        "stocks": [],
-        "success_count": 0,
-        "fail_count": 0
-    }
-
-    total = len(codes)
-    for i, code in enumerate(codes):
-        print(f"[{i+1}/{total}] 获取 {code}...")
+    def capture(component: str, call: Callable[[], Any]) -> None:
         try:
-            stock_data = fetch_stock_data(code, data_type, use_cache=True)
-            if "error" not in stock_data.get("basic_info", {}):
-                result["stocks"].append(stock_data)
-                result["success_count"] += 1
-            else:
-                result["fail_count"] += 1
-        except Exception as e:
-            print(f"  获取失败: {e}")
-            result["fail_count"] += 1
+            value = call()
+            result[component] = value
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key.endswith("source_interface") and isinstance(item, str):
+                        interfaces.add(item)
+        except RuntimeError as exc:
+            errors.append({"component": component, "error": str(exc)})
 
-        # 避免请求过快
-        if i < total - 1:
-            time.sleep(0.5)
+    if "basic_info" in requested:
+        capture("basic_info", lambda: get_stock_info(code, provider))
+    if "financial_data" in requested:
+        financial_data, component_errors = get_financial_data(code, years, provider)
+        if financial_data:
+            result["financial_data"] = financial_data
+            interfaces.update(value for key, value in financial_data.items() if key.endswith("source_interface"))
+        errors.extend({"component": f"financial_data.{item['component']}", "error": item["error"]} for item in component_errors)
+        if not financial_data:
+            errors.append({"component": "financial_data", "error": "没有任何财务报表可用。"})
+    if "financial_indicators" in requested:
+        capture("financial_indicators", lambda: get_financial_indicators(code, provider))
+    if "valuation" in requested:
+        capture("valuation", lambda: get_valuation_data(code, provider))
+    if "price" in requested:
+        capture("price", lambda: get_price_data(code, 60, provider))
+    if "holder" in requested:
+        holder, component_errors = get_holder_data(code, provider)
+        if holder:
+            result["holder"] = holder
+            interfaces.update(value for key, value in holder.items() if key.endswith("source_interface"))
+        errors.extend({"component": f"holder.{item['component']}", "error": item["error"]} for item in component_errors)
+        if not holder:
+            errors.append({"component": "holder", "error": "没有任何股东数据可用。"})
+    if "dividend" in requested:
+        capture("dividend", lambda: get_dividend_data(code, provider))
 
+    successful = [component for component in requested if component in result]
+    status = "complete" if len(successful) == len(requested) and not errors else "partial" if successful else "failed"
+    result["sources"] = [f"AkShare {interface}" for interface in sorted(interfaces)]
+    result["completeness"] = {
+        "status": status,
+        "successful_components": successful,
+        "errors": errors,
+    }
+    if use_cache and status == "complete":
+        save_cache(code, data_type, result)
     return result
 
 
-def main():
-    parser = argparse.ArgumentParser(description="A股数据获取工具")
-    parser.add_argument("--code", type=str, help="股票代码 (如: 600519)")
-    parser.add_argument("--codes", type=str, help="多个股票代码，逗号分隔 (如: 600519,000858)")
-    parser.add_argument("--data-type", type=str, default="basic",
-                       choices=["all", "basic", "financial", "valuation", "holder"],
-                       help="数据类型 (默认: basic)")
-    parser.add_argument("--years", type=int, default=3, help="获取多少年的历史数据 (默认: 3)")
-    parser.add_argument("--scope", type=str, help="筛选范围: hs300/zz500/cyb/kcb/all")
-    parser.add_argument("--no-cache", action="store_true", help="不使用缓存")
-    parser.add_argument("--output", type=str, help="输出文件路径 (JSON)")
+def fetch_multiple_stocks(
+    codes: list[str],
+    data_type: str = "basic",
+    years: int = 3,
+    use_cache: bool = True,
+    *,
+    provider: Any | None = None,
+) -> dict[str, Any]:
+    if not codes or len(codes) > MAX_CODES:
+        raise ValueError(f"一次必须请求 1–{MAX_CODES} 只股票。")
+    normalized = [_validate_code(code) for code in codes]
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("codes 包含重复股票代码。")
+    provider = provider or _provider()
+    stocks = [
+        fetch_stock_data(code, data_type, years, use_cache, provider=provider)
+        for code in normalized
+    ]
+    failed = [item for item in stocks if item["completeness"]["status"] == "failed"]
+    partial = [item for item in stocks if item["completeness"]["status"] == "partial"]
+    status = "complete" if not failed and not partial else "partial" if len(failed) < len(stocks) else "failed"
+    return {
+        "schema_version": 2,
+        "retrieved_at_utc": _utc_now(),
+        "data_type": data_type,
+        "stocks": stocks,
+        "completeness": {
+            "status": status,
+            "complete_count": sum(item["completeness"]["status"] == "complete" for item in stocks),
+            "partial_count": len(partial),
+            "failed_count": len(failed),
+        },
+    }
 
-    args = parser.parse_args()
 
-    result = {}
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="A 股可追溯数据获取工具")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--code", help="六位股票代码")
+    target.add_argument("--codes", help="逗号分隔的多个六位股票代码")
+    target.add_argument("--scope", choices=[*INDEX_CODES, "all"], help="指数范围或全部 A 股代码")
+    parser.add_argument("--data-type", choices=DATA_TYPES, default="basic", help="请求的数据组件")
+    parser.add_argument("--years", type=int, default=3, help="财务报表年数（1–10）")
+    parser.add_argument("--no-cache", action="store_true", help="不读取或写入当日缓存")
+    parser.add_argument("--allow-partial", action="store_true", help="显式允许部分组件失败时返回退出码 0")
+    parser.add_argument("--output", help="输出 JSON 文件")
+    return parser
 
-    if args.code:
-        result = fetch_stock_data(args.code, args.data_type, args.years,
-                                   use_cache=not args.no_cache)
-    elif args.codes:
-        codes = [c.strip() for c in args.codes.split(",")]
-        result = fetch_multiple_stocks(codes, args.data_type)
-    elif args.scope:
-        if args.scope == "all":
-            codes = get_all_a_stocks()
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        provider = _provider()
+        if args.code:
+            result = fetch_stock_data(
+                args.code,
+                args.data_type,
+                args.years,
+                not args.no_cache,
+                provider=provider,
+            )
+        elif args.codes:
+            codes = [item.strip() for item in args.codes.split(",") if item.strip()]
+            result = fetch_multiple_stocks(
+                codes,
+                args.data_type,
+                args.years,
+                not args.no_cache,
+                provider=provider,
+            )
         else:
-            codes = get_index_constituents(args.scope)
-        result = {"scope": args.scope, "stocks": codes, "count": len(codes)}
-    else:
-        print("请提供 --code, --codes 或 --scope 参数")
-        sys.exit(1)
-
-    # 输出结果
-    output = json.dumps(result, ensure_ascii=False, indent=2, default=str)
-
-    if args.output:
-        with open(args.output, 'w', encoding='utf-8') as f:
-            f.write(output)
-        print(f"\n数据已保存到: {args.output}")
-    else:
-        print(output)
+            codes = get_all_a_stocks(provider) if args.scope == "all" else get_index_constituents(args.scope, provider)
+            result = {
+                "schema_version": 2,
+                "scope": args.scope,
+                "stocks": codes,
+                "count": len(codes),
+                "retrieved_at_utc": _utc_now(),
+                "provider": "AkShare",
+                "source_interface": (
+                    "akshare.stock_zh_a_spot_em" if args.scope == "all" else "akshare.index_stock_cons"
+                ),
+                "completeness": {"status": "complete", "errors": []},
+            }
+        output = json.dumps(result, ensure_ascii=False, indent=2, default=str)
+        if args.output:
+            output_path = Path(args.output).expanduser().resolve()
+            output_path.write_text(output + "\n", encoding="utf-8")
+            print(f"数据结果已保存到：{output_path}")
+        else:
+            print(output)
+        status = result.get("completeness", {}).get("status", "failed")
+        return 0 if status == "complete" or (args.allow_partial and status == "partial") else 1
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

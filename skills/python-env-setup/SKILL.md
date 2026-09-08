@@ -5,6 +5,11 @@ description: 检测 Windows 机器上的 Python 解释器并给出安装或 PATH
 
 # Python 环境检查（Windows 原生）
 
+## 脚本路径
+
+先把 `<skill-directory>` 解析为本 `SKILL.md` 所在目录。执行示例中的 `scripts/...` 时使用其绝对路径，
+不要假设当前工作目录是仓库根目录。
+
 用于确认目标机器是否有可调用的 Windows x64 CPython 3.12。由于离线 wheelhouse 使用 `cp312` ABI，
 Python 3.11、3.13 或非 CPython 解释器都不能复用；不匹配时应安装能力包锁定的私有 3.12.10。
 

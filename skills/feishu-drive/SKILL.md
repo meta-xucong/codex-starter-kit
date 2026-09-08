@@ -1,97 +1,42 @@
 ---
 name: feishu-drive
-description: |
-  Feishu cloud storage file management. Activate when user mentions cloud space, folders, drive.
+description: 通过已配置的官方飞书/Lark MCP 浏览云盘文件和文件夹、读取元数据，并在用户明确要求时复制、建文件夹、移动或删除已有项目。Use when 用户提到飞书云空间、文件夹、云盘链接或文件整理；不支持文件内容上传和下载。
 ---
 
-# Feishu Drive Tool
+# 飞书云盘操作
 
-Single tool `feishu_drive` for cloud storage operations.
+## 前置检查
 
-## Token Extraction
+确认 MCP server `feishu` 已连接，工具名使用 dot case，且目标文件或文件夹已对当前应用或用户授权。连接不可用时只给配置步骤，
+不要声称已列出或修改云盘。
 
-From URL `https://xxx.feishu.cn/drive/folder/ABC123` → `folder_token` = `ABC123`
+## Token 处理
 
-## Actions
+从 `https://example.feishu.cn/drive/folder/ABC123` 提取文件夹 token。所有 file、folder 和 task token 均作为不透明字符串处理。
 
-### List Folder Contents
+## 工具映射
 
-```json
-{ "action": "list" }
-```
+| 目的 | 官方 MCP 工具 | 行为 |
+|---|---|---|
+| 列出文件夹内容 | `drive.v1.file.list` | 只读 |
+| 批量读取元数据 | `drive.v1.meta.batchQuery` | 只读 |
+| 复制文件 | `drive.v1.file.copy` | 写入 |
+| 创建文件夹 | `drive.v1.file.createFolder` | 写入 |
+| 移动文件或文件夹 | `drive.v1.file.move` | 写入 |
+| 删除文件或文件夹 | `drive.v1.file.delete` | 高风险写入，进入回收站 |
 
-Root directory (no folder_token).
+始终使用 MCP 工具提供的实际 schema，不复用旧平台 action 参数。
 
-```json
-{ "action": "list", "folder_token": "fldcnXXX" }
-```
+## 工作流
 
-Returns: files with token, name, type, url, timestamps.
+1. 先用 `drive.v1.file.list` 确认父目录和目标项目；有分页时读取到满足用户范围或分页结束。
+2. 需要核对标题、所有者、创建时间和类型时用 `drive.v1.meta.batchQuery`。
+3. 只有用户明确要求相应变更且目标唯一时，才调用复制、创建、移动或删除工具。
+4. 删除、移动或覆盖语义不清时，先列出解析出的目标 token、名称和父目录并询问缺失信息。
+5. 变更后重新读取目标目录，报告真实结果；调用失败时不要把计划描述成已完成。
 
-### Get File Info
+## 限制
 
-```json
-{ "action": "info", "file_token": "ABC123", "type": "docx" }
-```
-
-Searches for the file in the root directory. Note: file must be in root or use `list` to browse folders first.
-
-`type`: `doc`, `docx`, `sheet`, `bitable`, `folder`, `file`, `mindnote`, `shortcut`
-
-### Create Folder
-
-```json
-{ "action": "create_folder", "name": "New Folder" }
-```
-
-In parent folder:
-
-```json
-{ "action": "create_folder", "name": "New Folder", "folder_token": "fldcnXXX" }
-```
-
-### Move File
-
-```json
-{ "action": "move", "file_token": "ABC123", "type": "docx", "folder_token": "fldcnXXX" }
-```
-
-### Delete File
-
-```json
-{ "action": "delete", "file_token": "ABC123", "type": "docx" }
-```
-
-## File Types
-
-| Type       | Description             |
-| ---------- | ----------------------- |
-| `doc`      | Old format document     |
-| `docx`     | New format document     |
-| `sheet`    | Spreadsheet             |
-| `bitable`  | Multi-dimensional table |
-| `folder`   | Folder                  |
-| `file`     | Uploaded file           |
-| `mindnote` | Mind map                |
-| `shortcut` | Shortcut                |
-
-## Configuration
-
-```yaml
-channels:
-  feishu:
-    tools:
-      drive: true # default: true
-```
-
-## Permissions
-
-- `drive:drive` - Full access (create, move, delete)
-- `drive:drive:readonly` - Read only (list, info)
-
-## Known Limitations
-
-- **Bots have no root folder**: Feishu bots use `tenant_access_token` and don't have their own "My Space". The root folder concept only exists for user accounts. This means:
-  - `create_folder` without `folder_token` will fail (400 error)
-  - Bot can only access files/folders that have been **shared with it**
-  - **Workaround**: User must first create a folder manually and share it with the bot, then bot can create subfolders inside it
+- 官方 MCP 当前不支持文件内容上传或下载。不要尝试用 prepare/finish 分片接口拼装替代实现。
+- tenant token 下的机器人通常没有个人根目录，只能访问已共享给应用的文件或文件夹。
+- 用户要求读取文档正文时转用 `$feishu-doc`，不要把云盘元数据当成正文。

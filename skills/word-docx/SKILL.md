@@ -1,8 +1,6 @@
 ---
 name: word-docx
-version: 1.0.1
 description: Read and generate Word documents with correct structure, styles, and cross-platform compatibility.
-changelog: Clarified the skill name and added a page layout compatibility note.
 ---
 
 ## Structure

@@ -75,11 +75,8 @@ description: 数据分析与可视化助手，支持 Excel 处理、图表生成
 4. 结构化整理
 
 ### 网页信息获取
-当需要从网页获取数据或最新信息时，使用 `web-search-extraction` 技能：
-```bash
-python skills/web-search-extraction/scripts/web_search.py "搜索关键词" --json
-```
-适用于：获取最新统计数据、行业报告、竞品信息等
+需要从网页获取数据或最新信息时，优先使用当前 Codex 会话提供的网页搜索/浏览能力，打开来源并记录日期、单位和统计口径。
+当前会话不能联网时，只处理用户给出的链接、文件和文本，并明确无法实时核验。
 
 ### 表格提取
 - 使用 `pdfplumber` 提取表格数据

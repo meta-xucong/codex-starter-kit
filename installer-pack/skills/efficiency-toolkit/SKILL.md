@@ -162,14 +162,8 @@ description: 效率提升工具箱，支持文件整理、笔记管理、日程�
 ## 信息检索与整理
 
 ### 快速搜索技巧
-当需要查找特定信息时，使用 `web-search-extraction` 技能：
-```bash
-# 基础搜索
-python skills/web-search-extraction/scripts/web_search.py "搜索关键词"
-
-# 结构化输出（便于整理到笔记）
-python skills/web-search-extraction/scripts/web_search.py "搜索关键词" --json
-```
+需要查找外部信息时，优先使用当前 Codex 会话提供的网页搜索/浏览能力。当前会话不能联网时，
+只整理用户给出的链接、文件和文本，并明确哪些信息尚未核验。
 
 ### 搜索结果整理
 将搜索结果整理到笔记时：

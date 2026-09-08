@@ -1,290 +1,158 @@
 ---
 name: venture-analysis
-description: 创业投资分析工具，提供商业计划评估、财务建模、估值分析、尽职调查功能。帮助投资者理性评估早期项目投资机会，控制投资风险。
-version: 1.0.0
+description: 基于可核验证据和显式假设进行创业项目评分、财务场景、估值计算与尽调清单整理。
 ---
 
-# 创业投资技能
+# 创业项目分析
 
-创业投资分析工具，提供商业计划评估、财务建模、估值分析、尽职调查功能。
+## 脚本路径
 
-## When to Use
+先把 `<skill-directory>` 解析为本 `SKILL.md` 所在目录。执行 `scripts/...` 时使用绝对路径，
+不要假设当前工作目录是仓库根目录。结果写入当前项目或用户明确指定的位置，不写入 Skill 安装目录。
 
-当用户请求以下操作时调用此skill：
-- 评估创业项目投资价值
-- 分析商业计划可行性
-- 进行早期项目估值
-- 制作财务预测模型
-- 执行尽职调查
-- 评估投资风险
+## 数据与决策边界
 
----
+行业规模、竞品、融资、政策和可比交易具有时效性。优先用当前 Codex 的网页搜索/浏览能力打开公司材料、监管原文、
+统计资料或用户认可的数据源，记录发布日期、统计期、币种、单位和链接。网页能力不可用时，只分析用户提供的材料。
 
-## 🔍 数据获取规范
+四个脚本的边界：
 
-### 必须使用 `web-search-extraction` 技能的场景
+- `business_evaluator.py` 只计算用户审阅评分表，不从描述长度或市场金额生成“质量分”。
+- `financial_model.py` 只运行恒定参数场景，不内置健康阈值、融资轮次或 6 个月缓冲。
+- `valuation_analyzer.py` 只使用带来源的可比、倍数、Scorecard 与退出假设。
+- `due_diligence.py` 生成带法域、行业和交易结构上下文的通用起点清单，不替代律师、会计师、技术或数据合规专家意见。
 
-以下情况**必须**先使用 `web-search-extraction` 技能获取最新信息：
+不得把任何加权分、模型值或清单转换成自动“投/不投”决定。
 
-| 数据类型 | 示例 | 处理方式 |
-|---------|------|---------|
-| 行业数据 | "某行业最新市场规模" | `web-search-extraction` 获取 |
-| 竞品信息 | "某公司的竞争对手" | `web-search-extraction` 获取 |
-| 融资动态 | "某赛道最新融资情况" | `web-search-extraction` 获取 |
-| 政策影响 | "某行业监管政策变化" | `web-search-extraction` 获取 |
+## Workflow 1：商业评估评分表
 
-### 使用示例
+先把事实证据、市场口径和用户认可的评估维度写入 JSON。`criteria` 每项含唯一 `id`、`label`、0–1 `weight`、
+0–10 `score`、具体 `basis` 和 `risks`；权重必须合计 1。
 
-```
-用户：帮我评估这个AI项目
-
-步骤1：使用 web-search-extraction 技能获取行业数据
-Skill: web-search-extraction
-Args: "AI人工智能 2024 2025 市场规模 融资趋势"
-
-步骤2：用脚本进行评估分析
-python scripts/business_evaluator.py --industry "AI" ...
-```
-
-### 注意
-
-- 创业投资分析需要结合最新行业数据
-- **脚本提供分析框架，实时数据必须通过搜索获取**
-- 涉及具体估值倍数时，要参考最新市场案例
-
-## Core Modules
-
-### 1. Business Plan Evaluator (商业计划评估器)
-商业模式画布分析、竞争力评估
-
-### 2. Financial Modeler (财务建模器)
-收入预测、成本结构、现金流模型
-
-### 3. Valuation Analyzer (估值分析器)
-早期项目估值方法
-
-### 4. Due Diligence Checklist (尽职调查清单)
-投资前核查要点
-
----
-
-## Workflow 1: Business Plan Evaluation (商业计划评估)
-
-### 商业模式画布分析
-
-**价值主张**
-- 解决什么痛点？
-- 目标客户是谁？
-- 差异化优势？
-
-**市场分析**
-- TAM（总市场规模）
-- SAM（可服务市场）
-- SOM（可获得市场）
-
-**竞争格局**
-- 直接竞争对手
-- 间接竞争对手
-- 进入壁垒
-
-**盈利模式**
-- 收入来源
-- 成本结构
-- 盈亏平衡点
-
-### 评估项目
-
-```bash
-python scripts/business_evaluator.py \
-    --industry "新能源" \
-    --tam 10000000000 \
-    --team-score 8 \
-    --product-score 7 \
-    --market-score 6
+```json
+{
+  "project_name": "<项目名>",
+  "industry": "<行业>",
+  "as_of": "<输入时点>",
+  "sources": ["<商业计划或外部来源>"],
+  "evidence": ["<已核验事实>"],
+  "market": {
+    "tam": 0,
+    "sam": 0,
+    "som": 0,
+    "currency": "CNY",
+    "as_of": "<市场数据时点>",
+    "sources": ["<市场规模来源>"],
+    "basis": "<TAM/SAM/SOM 定义与计算口径>"
+  },
+  "criteria": [
+    {
+      "id": "team",
+      "label": "团队证据",
+      "weight": 1,
+      "score": 0,
+      "basis": "<为何给出该分数>",
+      "risks": []
+    }
+  ]
+}
 ```
 
----
+必须满足 `0 ≤ SOM ≤ SAM ≤ TAM`。零值仅是结构示意，不是实际市场输入。
 
-## Workflow 2: Financial Modeling (财务建模)
-
-### 预测模型
-
-**收入预测**
-- 用户增长曲线
-- ARPU（客单价）
-- 复购率
-- 收入 = 用户数 × ARPU × 复购率
-
-**成本结构**
-- 固定成本（人员、租金）
-- 变动成本（原材料、营销）
-- 边际成本趋势
-
-**现金流预测**
-- 经营性现金流
-- 投资性现金流
-- 融资需求
-
-### 制作财务模型
-
-```bash
-python scripts/financial_model.py \
-    --years 5 \
-    --initial-users 1000 \
-    --growth-rate 50 \
-    --arpu 100 \
-    --cac 50 \
-    --burn-rate 100000
+```text
+<python> "<skill-directory>/scripts/business_evaluator.py" \
+  --input "<reviewed-business-evaluation.json>" \
+  --json
 ```
 
----
+脚本只输出 `score × weight` 的贡献与总和，不输出评级、投资比例或推荐结论。
 
-## Workflow 3: Valuation Analysis (估值分析)
+## Workflow 2：财务场景
 
-### 早期项目估值方法
+模型显式区分年净活跃用户增长率、月流失率、每新增活跃用户 CAC、月 ARPU、固定成本和其他现金流出。
+它用月流失率估算年留存，再计算达到年末净增长目标需要补充的活跃用户；收入按年初/年末平均活跃用户计算。
 
-**可比公司法**
-- 找到同行业已融资公司
-- 对比估值倍数（P/S、P/E）
-- 考虑阶段折扣
-
-**风险投资法**
-- 预测退出时的估值
-- 考虑稀释比例
-- 计算目标回报率
-- 倒推当前估值
-
-**Scorecard法**
-- 团队（30%）
-- 产品（25%）
-- 市场（20%）
-- 竞争（15%）
-- 时机（10%）
-
-### 进行估值
-
-```bash
-python scripts/valuation_analyzer.py \
-    --stage "天使轮" \
-    --revenue 0 \
-    --team-score 8 \
-    --market-growth 30 \
-    --target-return 10
+```text
+<python> "<skill-directory>/scripts/financial_model.py" \
+  --years 5 \
+  --initial-active-users 1000 \
+  --annual-net-user-growth-rate 50 \
+  --monthly-arpu 100 \
+  --cac-per-new-user 50 \
+  --gross-margin 70 \
+  --monthly-churn-rate 3 \
+  --monthly-fixed-costs 50000 \
+  --monthly-other-cash-outflow 10000 \
+  --initial-cash 500000 \
+  --liquidity-buffer-months 6 \
+  --as-of "<输入时点>" \
+  --source "<数据来源或假设依据>" \
+  --json
 ```
 
----
+`liquidity-buffer-months` 是调用者显式场景，不是脚本建议。LTV、LTV/CAC 和回本期只展示算式结果，不用固定阈值
+标记“健康”。输出未包含税、营运资本、资本开支、融资稀释、季节性或 cohort 差异。
 
-## Workflow 4: Due Diligence (尽职调查)
+## Workflow 3：早期估值场景
 
-### 核查清单
+先从可比交易或用户材料形成 `assumptions.json`，必须包含：
 
-**法律尽调**
-- [ ] 公司注册文件
-- [ ] 股权结构
-- [ ] 知识产权
-- [ ] 重大合同
-- [ ] 诉讼情况
+- `as_of`、非空 `sources`
+- `comparable_valuation_range`（万元）
+- `revenue_multiple_range`
+- `scorecard_base_valuation`（万元）
+- 团队、产品、市场、竞争、时机五项 `scorecard_weights`，合计 1
+- 把 0–10 加权分线性映射到估值因子的 `scorecard_factor_range`
+- `range_factor`
 
-**财务尽调**
-- [ ] 财务报表
-- [ ] 银行流水
-- [ ] 税务合规
-- [ ] 关联交易
-- [ ] 债务情况
+公司输入、目标回报和退出倍数也必须显式填写：
 
-**业务尽调**
-- [ ] 核心团队背景
-- [ ] 技术验证
-- [ ] 客户访谈
-- [ ] 供应商访谈
-- [ ] 竞品分析
-
-### 生成尽调清单
-
-```bash
-python scripts/due_diligence.py --stage "A轮" --output dd_checklist.md
+```text
+<python> "<skill-directory>/scripts/valuation_analyzer.py" \
+  --assumptions "<reviewed-valuation-assumptions.json>" \
+  --stage "<阶段>" \
+  --industry "<行业>" \
+  --revenue <收入> \
+  --growth-rate <增长率> \
+  --team-score <0-10> \
+  --product-score <0-10> \
+  --market-score <0-10> \
+  --competition-score <0-10> \
+  --timing-score <0-10> \
+  --target-return <目标回报率> \
+  --exit-multiple <退出倍数> \
+  --years <年数> \
+  --json
 ```
 
----
+结果只是这些假设下的估算，不是最新交易价格或投资承诺。脚本并列展示三种方法及总包络，不再平均方法得到
+“公允值”，也不自动生成谈判价、对赌条款或投资建议。
 
-## 投资风险评估
+## Workflow 4：尽调清单
 
-### 风险等级
+```text
+<python> "<skill-directory>/scripts/due_diligence.py" \
+  --stage "A轮" \
+  --jurisdiction "<法域>" \
+  --industry "<行业>" \
+  --transaction-structure "<股权/可转债等结构>" \
+  --output "<project-data>/dd_checklist.md"
+```
 
-| 风险类型 | 权重 | 评估要点 |
-|----------|------|----------|
-| 团队风险 | 30% | 创始人能力、团队完整性 |
-| 市场风险 | 25% | 市场规模、增长性 |
-| 产品风险 | 20% | 技术可行性、差异化 |
-| 竞争风险 | 15% | 壁垒、护城河 |
-| 财务风险 | 10% | 烧钱速度、融资能力 |
+把脚本输出视为通用起点。所有条目的初始状态均为 `not_reviewed`、适用性为 `confirm`；脚本不自动分配高/中优先级，
+也不生成固定周期、负责人、适用人群或投资处置。根据法域、行业、交易结构、数据处理、知识产权和用户要求增删项目；
+负责人、周期、证据标准和材料充分性均需人工确认。不得因生成了清单就声称已完成尽调。
 
-### 投资建议矩阵
+## 输出要求
 
-| 综合评分 | 建议 | 投资比例 |
-|----------|------|----------|
-| 85-100 | 强烈推荐 | 可投上限 |
-| 70-84 | 推荐 | 正常投资 |
-| 55-69 | 谨慎 | 减少投资 |
-| <55 | 不推荐 | 不投资 |
-
----
-
-## 标准输出格式
-
-### 🧭 投资官视角
-
-#### 一、核心结论
-（投或不投，估值区间）
-
-#### 二、背后逻辑
-- 商业模式分析
-- 财务预测依据
-- 估值方法说明
-
-#### 三、风险在哪里
-- 最大风险点
-- 失败概率评估
-- 下行保护
-
-#### 四、适合谁
-- 风险承受能力
-- 投资期限匹配
-- 专业背景要求
-
-#### 五、操作策略
-- 投资金额建议
-- 估值谈判区间
-- 条款清单要点
-
-#### 六、如果判断错了
-- 退出机制
-- 止损线
-- 后续轮次策略
-
----
+1. 所有外部事实、市场口径、假设与评分依据均带时点和来源。
+2. 区分事实、用户评分、机械计算、分析假设和专业判断。
+3. 展示敏感性、反例、缺失材料和可证伪指标。
+4. 不生成固定投资比例、自动推荐、止损线或融资轮次。
+5. 法律、税务、会计和证券问题明确转交相应持证专业人士。
 
 ## 数据存储
 
-| 文件 | 位置 |
-|------|------|
-| 商业评估 | `${CODEX_DATA_DIR:-./codex-data}/skills/venture-analysis/business_evaluations.json` |
-| 财务模型 | `${CODEX_DATA_DIR:-./codex-data}/skills/venture-analysis/financial_models.json` |
-| 估值分析 | `${CODEX_DATA_DIR:-./codex-data}/skills/venture-analysis/valuations.json` |
-| 尽调清单 | `${CODEX_DATA_DIR:-./codex-data}/skills/venture-analysis/due_diligence/` |
-
-**跨平台说明：**
-- 默认存储在用户主目录下的 `codex-data` 文件夹
-- 可通过环境变量 `CODEX_DATA_DIR` 自定义存储位置
-- Windows: `C:\Users\<用户名>\codex-data\`
-- macOS/Linux: `./codex-data/`
-
----
-
-## Important Notes
-
-- 早期投资高风险，单笔不超过可投资资产的10%
-- 建议分散投资多个项目
-- 做好全部亏损的心理准备
-- 关注退出路径（IPO/并购/股权转让）
-- 所有分析仅供参考，不构成投资建议
+建议使用 `${CODEX_DATA_DIR:-./codex-data}/venture-analysis/` 下的 `business/`、`financial-models/`、
+`valuations/` 和 `due-diligence/`。公开能力包不包含项目材料、模型输入或尽调结果。

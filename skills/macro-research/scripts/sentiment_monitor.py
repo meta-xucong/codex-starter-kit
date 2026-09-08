@@ -3,353 +3,213 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""
-情绪监控器
+"""Attributed market-sentiment arithmetic with explicit scoring weights."""
 
-监控市场情绪指标
-
-Usage:
-    python sentiment_monitor.py --index "沪深300"
-"""
+from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
-from typing import Dict, List
+import math
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 
-def calculate_fear_greed_index(indicators: Dict) -> Dict:
-    """计算恐惧贪婪指数（0-100）"""
-    
-    # 各指标权重
+INDICATOR_KEYS = (
+    "market_momentum",
+    "stock_price_strength",
+    "stock_price_breadth",
+    "put_call_ratio",
+    "market_volatility",
+    "safe_haven_demand",
+)
+MAX_INPUT_BYTES = 1024 * 1024
+
+
+def _required_number(data: dict[str, Any], key: str, section: str, minimum=None, maximum=None) -> float:
+    if key not in data or isinstance(data[key], bool) or not isinstance(data[key], (int, float)):
+        raise ValueError(f"{section}.{key} 必须是显式提供的数字。")
+    value = float(data[key])
+    if not math.isfinite(value):
+        raise ValueError(f"{section}.{key} 必须是有限数字。")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{section}.{key} 不得小于 {minimum}。")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{section}.{key} 不得大于 {maximum}。")
+    return value
+
+
+def validate_sentiment_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Require complete real inputs and a reviewed weighting policy."""
+    if not isinstance(data, dict):
+        raise ValueError("输入 JSON 顶层必须是对象。")
+    as_of = str(data.get("as_of") or "").strip()
+    if not as_of:
+        raise ValueError("缺少 data.as_of 数据时点。")
+    sources = data.get("sources")
+    if not isinstance(sources, list) or not sources or not all(isinstance(item, str) and item.strip() for item in sources):
+        raise ValueError("data.sources 必须至少包含一个非空来源说明或 URL。")
+
+    sections = {}
+    for section in ("indicators", "weights", "breadth", "volume", "fund_flow"):
+        value = data.get(section)
+        if not isinstance(value, dict):
+            raise ValueError(f"缺少完整的 data.{section} 对象。")
+        sections[section] = value
+    if set(sections["indicators"]) != set(INDICATOR_KEYS):
+        raise ValueError(f"indicators 必须且只能包含 {list(INDICATOR_KEYS)}。")
+    if set(sections["weights"]) != set(INDICATOR_KEYS):
+        raise ValueError(f"weights 必须且只能包含 {list(INDICATOR_KEYS)}。")
+
+    indicators = {
+        key: _required_number(sections["indicators"], key, "indicators", 0, 100)
+        for key in INDICATOR_KEYS
+    }
     weights = {
-        "market_momentum": 0.25,      # 市场动量
-        "stock_price_strength": 0.20,  # 股价强度
-        "stock_price_breadth": 0.15,   # 股价宽度
-        "put_call_ratio": 0.15,        #  put/call比率
-        "market_volatility": 0.15,     # 市场波动
-        "safe_haven_demand": 0.10      # 避险需求
+        key: _required_number(sections["weights"], key, "weights", 0, 1)
+        for key in INDICATOR_KEYS
     }
-    
-    # 计算加权得分（每个指标0-100）
-    total_score = 0
-    for key, weight in weights.items():
-        score = indicators.get(key, 50)
-        total_score += score * weight
-    
-    # 确定情绪等级
-    if total_score >= 75:
-        sentiment = "极度贪婪"
-        color = "🔴"
-        action = "减仓"
-    elif total_score >= 55:
-        sentiment = "贪婪"
-        color = "🟠"
-        action = "逐步减仓"
-    elif total_score >= 45:
-        sentiment = "中性"
-        color = "🟡"
-        action = "持有"
-    elif total_score >= 25:
-        sentiment = "恐惧"
-        color = "🔵"
-        action = "逐步加仓"
-    else:
-        sentiment = "极度恐惧"
-        color = "🟢"
-        action = "加仓"
-    
+    if not math.isclose(sum(weights.values()), 1.0, abs_tol=0.000001):
+        raise ValueError("weights 必须合计 1。")
+
+    advancing = _required_number(sections["breadth"], "advancing_stocks", "breadth", 0)
+    declining = _required_number(sections["breadth"], "declining_stocks", "breadth", 0)
+    if not advancing.is_integer() or not declining.is_integer():
+        raise ValueError("breadth 的上涨/下跌家数必须是整数。")
+    if advancing + declining == 0:
+        raise ValueError("breadth 上涨和下跌家数不能同时为 0。")
+    volume = {
+        "current_volume": _required_number(sections["volume"], "current_volume", "volume", 0),
+        "avg_volume": _required_number(sections["volume"], "avg_volume", "volume", 0),
+        "price_change": _required_number(sections["volume"], "price_change", "volume"),
+    }
+    if volume["avg_volume"] == 0:
+        raise ValueError("volume.avg_volume 必须大于 0。")
+    fund_flow = {
+        key: _required_number(sections["fund_flow"], key, "fund_flow")
+        for key in ("northbound_flow", "main_force_flow", "retail_flow")
+    }
     return {
-        "index_value": round(total_score, 1),
-        "sentiment": sentiment,
-        "color": color,
-        "suggested_action": action,
-        "components": indicators
+        "as_of": as_of,
+        "sources": [item.strip() for item in sources],
+        "indicators": indicators,
+        "weights": weights,
+        "breadth": {"advancing_stocks": int(advancing), "declining_stocks": int(declining)},
+        "volume": volume,
+        "fund_flow": fund_flow,
     }
 
 
-def analyze_market_breadth(data: Dict) -> Dict:
-    """分析市场广度"""
-    
-    advancing = data.get("advancing_stocks", 2000)
-    declining = data.get("declining_stocks", 2000)
+def calculate_weighted_index(indicators: dict[str, float], weights: dict[str, float]) -> dict[str, Any]:
+    contributions = {key: indicators[key] * weights[key] for key in INDICATOR_KEYS}
+    return {
+        "value": round(sum(contributions.values()), 4),
+        "scale": [0, 100],
+        "components": indicators,
+        "weights": weights,
+        "contributions": {key: round(value, 4) for key, value in contributions.items()},
+        "notice": "指标归一化方法与权重均由调用者负责；脚本不把分数映射为贪婪/恐惧或买卖动作。",
+    }
+
+
+def analyze_market_breadth(data: dict[str, float]) -> dict[str, Any]:
+    advancing = data["advancing_stocks"]
+    declining = data["declining_stocks"]
     total = advancing + declining
-    
-    if total > 0:
-        advance_decline_ratio = advancing / declining if declining > 0 else 999
-        breadth_indicator = (advancing / total) * 100
-    else:
-        advance_decline_ratio = 1
-        breadth_indicator = 50
-    
     return {
         "advancing_stocks": advancing,
         "declining_stocks": declining,
-        "advance_decline_ratio": round(advance_decline_ratio, 2),
-        "breadth_indicator": round(breadth_indicator, 1),
-        "interpretation": "普涨" if breadth_indicator > 60 else "普跌" if breadth_indicator < 40 else "分化"
+        "advance_decline_ratio": None if declining == 0 else round(advancing / declining, 4),
+        "advancing_share_percent": round(advancing / total * 100, 4),
     }
 
 
-def analyze_volume_trend(data: Dict) -> Dict:
-    """分析量能趋势"""
-    
-    current_volume = data.get("current_volume", 1000)
-    avg_volume = data.get("avg_volume", 1000)
-    
-    if avg_volume > 0:
-        volume_ratio = current_volume / avg_volume
-    else:
-        volume_ratio = 1
-    
-    if volume_ratio > 1.5:
-        trend = "放量"
-        signal = "积极" if data.get("price_change", 0) > 0 else "警惕"
-    elif volume_ratio < 0.7:
-        trend = "缩量"
-        signal = "观望"
-    else:
-        trend = "平量"
-        signal = "中性"
-    
+def analyze_volume(data: dict[str, float]) -> dict[str, Any]:
     return {
-        "volume_ratio": round(volume_ratio, 2),
-        "trend": trend,
-        "signal": signal
+        "current_volume": data["current_volume"],
+        "average_volume": data["avg_volume"],
+        "volume_ratio": round(data["current_volume"] / data["avg_volume"], 4),
+        "price_change": data["price_change"],
     }
 
 
-def analyze_fund_flow(data: Dict) -> Dict:
-    """分析资金流向"""
-    
-    northbound = data.get("northbound_flow", 0)  # 北向资金
-    main_force = data.get("main_force_flow", 0)   # 主力资金
-    retail = data.get("retail_flow", 0)           # 散户资金
-    
-    total_flow = northbound + main_force + retail
-    
-    return {
-        "northbound": northbound,
-        "main_force": main_force,
-        "retail": retail,
-        "total_flow": total_flow,
-        "interpretation": "资金净流入" if total_flow > 0 else "资金净流出",
-        "strength": "强" if abs(total_flow) > 100 else "中" if abs(total_flow) > 50 else "弱"
-    }
+def analyze_fund_flow(data: dict[str, float]) -> dict[str, Any]:
+    total = data["northbound_flow"] + data["main_force_flow"] + data["retail_flow"]
+    return {**data, "total_flow": round(total, 4)}
 
 
-def generate_sentiment_report(index_name: str, data: Dict) -> Dict:
-    """生成情绪监控报告"""
-    
-    # 计算恐惧贪婪指数
-    fear_greed = calculate_fear_greed_index(data.get("indicators", {}))
-    
-    # 市场广度
-    breadth = analyze_market_breadth(data.get("breadth", {}))
-    
-    # 量能趋势
-    volume = analyze_volume_trend(data.get("volume", {}))
-    
-    # 资金流向
-    fund_flow = analyze_fund_flow(data.get("fund_flow", {}))
-    
+def generate_sentiment_report(index_name: str, data: dict[str, Any]) -> dict[str, Any]:
+    validated = validate_sentiment_data(data)
+    index_name = str(index_name or "").strip()
+    if not index_name:
+        raise ValueError("index_name 必须是非空文本。")
     return {
-        "monitored_at": datetime.now().isoformat(),
+        "calculated_at": datetime.now(timezone.utc).isoformat(),
+        "data_as_of": validated["as_of"],
+        "sources": validated["sources"],
         "index": index_name,
-        "fear_greed_index": fear_greed,
-        "market_breadth": breadth,
-        "volume_trend": volume,
-        "fund_flow": fund_flow,
-        "overall_assessment": generate_overall_assessment(fear_greed, breadth, volume, fund_flow),
-        "suggestions": generate_sentiment_suggestions(fear_greed, fund_flow)
+        "weighted_index": calculate_weighted_index(validated["indicators"], validated["weights"]),
+        "market_breadth": analyze_market_breadth(validated["breadth"]),
+        "volume": analyze_volume(validated["volume"]),
+        "fund_flow": analyze_fund_flow(validated["fund_flow"]),
+        "methodology": "只计算显式权重的合成值及广度、量比、资金流算术；不生成仓位、止损或交易建议。",
     }
 
 
-def generate_overall_assessment(fear_greed: Dict, breadth: Dict, 
-                                volume: Dict, fund_flow: Dict) -> Dict:
-    """生成综合评估"""
-    
-    score = fear_greed["index_value"]
-    
-    # 综合判断
-    if score >= 70 and fund_flow["total_flow"] < 0:
-        assessment = "顶部特征明显，建议减仓"
-        risk_level = "高"
-    elif score <= 30 and fund_flow["total_flow"] > 0:
-        assessment = "底部特征显现，建议加仓"
-        risk_level = "低"
-    elif 40 <= score <= 60:
-        assessment = "市场情绪中性，维持现有仓位"
-        risk_level = "中"
-    else:
-        assessment = "情绪与资金背离，保持谨慎"
-        risk_level = "中高"
-    
-    return {
-        "assessment": assessment,
-        "risk_level": risk_level,
-        "key_signals": [
-            f"恐惧贪婪指数：{fear_greed['index_value']:.0f}（{fear_greed['sentiment']}）",
-            f"市场广度：{breadth['interpretation']}（上涨{breadth['breadth_indicator']:.0f}%）",
-            f"量能趋势：{volume['trend']}（{volume['signal']}）",
-            f"资金流向：{fund_flow['interpretation']}（力度{fund_flow['strength']}）"
+def format_report(report: dict[str, Any]) -> str:
+    breadth = report["market_breadth"]
+    volume = report["volume"]
+    flow = report["fund_flow"]
+    return "\n".join(
+        [
+            f"市场情绪输入汇总：{report['index']}",
+            f"数据时点：{report['data_as_of']}",
+            "来源：" + "；".join(report["sources"]),
+            f"显式权重合成值：{report['weighted_index']['value']}/100",
+            f"上涨占比：{breadth['advancing_share_percent']}%",
+            f"涨跌家数比：{breadth['advance_decline_ratio']}",
+            f"量比：{volume['volume_ratio']}；价格变化：{volume['price_change']}",
+            f"三类资金流合计：{flow['total_flow']}",
+            "方法边界：" + report["methodology"],
         ]
-    }
+    )
 
 
-def generate_sentiment_suggestions(fear_greed: Dict, fund_flow: Dict) -> List[str]:
-    """生成情绪操作建议"""
-    
-    suggestions = []
-    
-    # 基于恐惧贪婪指数
-    if fear_greed["index_value"] >= 75:
-        suggestions.append("市场情绪极度贪婪，考虑逐步减仓")
-        suggestions.append("关注估值过高的板块，及时获利了结")
-    elif fear_greed["index_value"] <= 25:
-        suggestions.append("市场情绪极度恐惧，可能是布局良机")
-        suggestions.append("关注被错杀的优质资产")
-    
-    # 基于资金流向
-    if fund_flow["total_flow"] > 100:
-        suggestions.append("资金大幅净流入，短期或有支撑")
-    elif fund_flow["total_flow"] < -100:
-        suggestions.append("资金大幅净流出，注意风险")
-    
-    # 通用建议
-    suggestions.append("情绪指标仅供参考，不单独作为买卖依据")
-    suggestions.append("结合基本面和技术面综合判断")
-    suggestions.append("避免情绪化交易，坚持投资纪律")
-    
-    return suggestions
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="显式权重的市场情绪算术汇总器")
+    parser.add_argument("--index", required=True, help="市场或指数标签")
+    parser.add_argument("--input", required=True, help="完整、带来源/时点/权重的 JSON")
+    parser.add_argument("--output", help="输出 JSON 文件")
+    parser.add_argument("--json", action="store_true", help="输出 JSON")
+    return parser
 
 
-def format_report(report: Dict) -> str:
-    """格式化情绪监控报告（投资官六段式）"""
-    
-    fg = report["fear_greed_index"]
-    mb = report["market_breadth"]
-    vt = report["volume_trend"]
-    ff = report["fund_flow"]
-    oa = report["overall_assessment"]
-    
-    lines = [
-        "=" * 60,
-        f"市场情绪监控报告 - {report['index']}",
-        "=" * 60,
-        "",
-        "## 🧭 投资官视角",
-        "",
-        "### 一、核心结论",
-        f"【恐惧贪婪指数】{fg['color']} {fg['index_value']:.0f}/100 - {fg['sentiment']}",
-        f"【建议操作】{fg['suggested_action']}",
-        f"【综合评估】{oa['assessment']}",
-        f"【风险等级】{oa['risk_level']}",
-        "",
-        "### 二、背后逻辑",
-        "【关键信号】",
-    ]
-    
-    for signal in oa["key_signals"]:
-        lines.append(f"• {signal}")
-    
-    lines.extend([
-        "",
-        "【指标详解】",
-        f"• 涨跌家数比：{mb['advance_decline_ratio']:.2f}（{mb['advancing_stocks']}涨 vs {mb['declining_stocks']}跌）",
-        f"• 量能水平：{vt['volume_ratio']:.2f}倍于均值（{vt['trend']}）",
-        f"• 资金流向：北向{ff['northbound']:.0f}亿 + 主力{ff['main_force']:.0f}亿 + 散户{ff['retail']:.0f}亿",
-        "",
-        "### 三、风险在哪里",
-        "⚠️ 情绪指标可能短期波动，不代表长期趋势",
-        "⚠️ 极端情绪可能持续，不要逆势过早",
-        "⚠️ 机构可能利用情绪指标反向操作",
-        "⚠️ 单一指标不可靠，需多维度验证",
-        "",
-        "### 四、适合谁",
-        "• 进行中短期交易的投资者",
-        "• 希望把握市场情绪节奏的投资者",
-        "• 有纪律性、能克服情绪干扰的投资者",
-        "",
-        "### 五、操作策略",
-    ])
-    
-    for suggestion in report["suggestions"]:
-        lines.append(f"✓ {suggestion}")
-    
-    lines.extend([
-        "",
-        "【情绪指数使用指南】",
-        "• 0-25：极度恐惧，考虑逐步加仓",
-        "• 26-45：恐惧，关注机会",
-        "• 46-55：中性，持有观望",
-        "• 56-75：贪婪，考虑减仓",
-        "• 76-100：极度贪婪，果断减仓",
-        "",
-        "### 六、如果判断错了",
-        "• 如情绪指标与市场走势背离，以价格走势为准",
-        "• 如情绪极端但市场继续上涨，等待确认信号",
-        "• 如情绪好转但市场继续下跌，警惕趋势反转",
-        "• 建议设置止损线，不因情绪而扛单",
-        "",
-        "=" * 60,
-        f"监控时间：{report['monitored_at']}",
-        "=" * 60
-    ])
-    
-    return "\n".join(lines)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="情绪监控器")
-    parser.add_argument("--index", type=str, default="沪深300",
-                       help="监控的指数")
-    parser.add_argument("--fear-greed", type=float,
-                       help="恐惧贪婪指数（0-100）")
-    parser.add_argument("--output", type=str, help="输出JSON文件")
-    parser.add_argument("--json", action="store_true", help="JSON格式输出")
-    
-    args = parser.parse_args()
-    
-    # 模拟数据（实际应从数据源获取）
-    mock_data = {
-        "indicators": {
-            "market_momentum": args.fear_greed if args.fear_greed else 45,
-            "stock_price_strength": 50,
-            "stock_price_breadth": 48,
-            "put_call_ratio": 45,
-            "market_volatility": 52,
-            "safe_haven_demand": 40
-        },
-        "breadth": {
-            "advancing_stocks": 1800,
-            "declining_stocks": 2200
-        },
-        "volume": {
-            "current_volume": 8500,
-            "avg_volume": 8000,
-            "price_change": -0.5
-        },
-        "fund_flow": {
-            "northbound": -20,
-            "main_force": -50,
-            "retail": 30
-        }
-    }
-    
-    report = generate_sentiment_report(args.index, mock_data)
-    
-    if args.json or args.output:
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        path = Path(args.input).expanduser().resolve()
+        if not path.is_file() or path.stat().st_size > MAX_INPUT_BYTES:
+            raise ValueError("输入 JSON 不存在或超过 1 MiB。")
+        report = generate_sentiment_report(args.index, json.loads(path.read_text(encoding="utf-8")))
         output = json.dumps(report, ensure_ascii=False, indent=2)
         if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(output)
-            print(f"报告已保存到: {args.output}")
-        else:
+            output_path = Path(args.output).expanduser().resolve()
+            output_path.write_text(output + "\n", encoding="utf-8")
+            print(f"报告已保存到: {output_path}")
+        elif args.json:
             print(output)
-    else:
-        print(format_report(report))
+        else:
+            print(format_report(report))
+        return 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        if args.json:
+            print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False))
+        else:
+            print(f"情绪汇总失败：{exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

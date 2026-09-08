@@ -3,366 +3,203 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""
-尽职调查清单生成器
+"""Create a clearly labelled, context-specific due-diligence starter checklist."""
 
-生成创业投资尽调Checklist
-
-Usage:
-    python due_diligence.py --stage "A轮" --output dd_checklist.md
-"""
+from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
-from typing import Dict, List
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 
-def generate_legal_dd(stage: str) -> Dict:
-    """生成法律尽调清单"""
-    
-    base_items = [
-        {"item": "公司营业执照、公司章程", "importance": "高", "status": "待核查"},
-        {"item": "股权结构图及股东名册", "importance": "高", "status": "待核查"},
-        {"item": "历史融资协议及股东协议", "importance": "高", "status": "待核查"},
-        {"item": "董事会/股东会决议文件", "importance": "中", "status": "待核查"},
-        {"item": "知识产权证书（专利/商标/软著）", "importance": "高", "status": "待核查"},
-        {"item": "重大合同（客户/供应商）", "importance": "高", "status": "待核查"},
-        {"item": "诉讼、仲裁、行政处罚查询", "importance": "高", "status": "待核查"},
-        {"item": "员工劳动合同及社保缴纳", "importance": "中", "status": "待核查"},
-        {"item": "关联交易清单", "importance": "中", "status": "待核查"},
-        {"item": "债务及担保情况", "importance": "高", "status": "待核查"}
-    ]
-    
-    stage_specific = {
-        "天使轮": [],
-        "Pre-A": [
-            {"item": "期权池设置及激励计划", "importance": "中", "status": "待核查"}
-        ],
-        "A轮": [
-            {"item": "期权池设置及激励计划", "importance": "中", "status": "待核查"},
-            {"item": "核心员工竞业禁止协议", "importance": "高", "status": "待核查"},
-            {"item": "数据合规及隐私政策", "importance": "高", "status": "待核查"}
-        ],
-        "B轮": [
-            {"item": "期权池设置及激励计划", "importance": "中", "status": "待核查"},
-            {"item": "核心员工竞业禁止协议", "importance": "高", "status": "待核查"},
-            {"item": "数据合规及隐私政策", "importance": "高", "status": "待核查"},
-            {"item": "海外业务合规（如有）", "importance": "高", "status": "待核查"},
-            {"item": "VIE架构文件（如有）", "importance": "高", "status": "待核查"}
-        ]
-    }
-    
-    items = base_items + stage_specific.get(stage, [])
-    
-    return {
-        "category": "法律尽调",
-        "item_count": len(items),
-        "high_priority": len([i for i in items if i["importance"] == "高"]),
-        "items": items
-    }
+TEMPLATE_VERSION = "2.0"
+STAGES = ("天使轮", "Pre-A", "A轮", "B轮")
+
+COMMON_ITEMS: dict[str, list[tuple[str, str]]] = {
+    "legal": [
+        ("entity", "核对设立、存续、章程、登记和组织架构文件"),
+        ("capitalization", "核对完整股权表、历史变更、期权及其他潜在稀释安排"),
+        ("securities", "核对历次融资、股东协议及仍有效的投资者权利"),
+        ("contracts", "盘点重大客户、供应商、合作、债务及控制权变更条款"),
+        ("ip", "核对知识产权权属、许可、开源使用及员工/承包商成果归属"),
+        ("employment", "核对劳动、顾问、保密、竞业及关键人员安排"),
+        ("disputes", "核对诉讼、仲裁、行政调查、处罚及潜在争议"),
+        ("privacy", "核对个人信息、数据跨境、网络安全和事件响应义务"),
+        ("permits", "核对经营许可、行业准入及持续合规要求"),
+    ],
+    "financial": [
+        ("statements", "核对财务报表、会计政策、审计/审阅范围和调整事项"),
+        ("ledger", "抽查总账、明细账、银行流水与报表勾稽关系"),
+        ("revenue", "核对收入确认、合同条款、截止性、退款和递延项目"),
+        ("customers", "核对客户集中度、应收账款、回款和坏账口径"),
+        ("costs", "核对成本归集、供应商集中度、毛利和非经常项目"),
+        ("tax", "核对税务申报、优惠依据、欠缴情形和不确定税务事项"),
+        ("debt", "核对债务、担保、抵押、承诺、或有负债和表外安排"),
+        ("related-parties", "识别关联方、关联交易和资金往来"),
+        ("forecast", "核对预算、现金流预测及关键假设与历史数据的一致性"),
+    ],
+    "business": [
+        ("team", "核验核心团队经历、职责、投入程度和关键人员依赖"),
+        ("product", "核验产品、技术架构、交付能力、路线图和技术债"),
+        ("customers", "设计客户/用户核验并检查留存、使用和流失定义"),
+        ("market", "复核市场规模、竞争格局和可比口径的证据链"),
+        ("economics", "复核获客、留存、毛利和单位经济指标定义及数据血缘"),
+        ("go-to-market", "复核销售周期、渠道依赖、定价和续约机制"),
+        ("operations", "复核供应链、服务水平、质量控制和业务连续性"),
+        ("security", "复核访问控制、安全测试、备份恢复和第三方风险"),
+    ],
+}
+
+STAGE_ADDITIONS: dict[str, dict[str, list[tuple[str, str]]]] = {
+    "天使轮": {
+        "business": [("validation", "核验当前产品验证范围以及尚未验证的核心假设")],
+    },
+    "Pre-A": {
+        "financial": [("runway", "复核资金消耗、现金余额和跑道计算口径")],
+        "business": [("cohorts", "按一致口径复核用户 cohort 与渠道质量")],
+    },
+    "A轮": {
+        "financial": [("working-capital", "复核运营资本、账龄和现金转换周期")],
+        "business": [("scaling", "核验规模化假设、交付瓶颈和关键岗位能力")],
+    },
+    "B轮": {
+        "legal": [("multi-region", "按实际经营地区核对跨区域或跨境合规")],
+        "financial": [("segments", "复核分产品、地区或业务线数据与合并口径")],
+        "business": [("controls", "复核管理报告、内部控制和数据治理成熟度")],
+    },
+}
 
 
-def generate_financial_dd(stage: str) -> Dict:
-    """生成财务尽调清单"""
-    
-    base_items = [
-        {"item": "近三年审计报告（如有）", "importance": "高", "status": "待核查"},
-        {"item": "最近12个月银行流水", "importance": "高", "status": "待核查"},
-        {"item": "科目余额表及明细账", "importance": "中", "status": "待核查"},
-        {"item": "收入确认政策及依据", "importance": "高", "status": "待核查"},
-        {"item": "主要客户及收入占比", "importance": "高", "status": "待核查"},
-        {"item": "主要供应商及采购占比", "importance": "中", "status": "待核查"},
-        {"item": "税务合规证明", "importance": "高", "status": "待核查"},
-        {"item": "关联方往来明细", "importance": "中", "status": "待核查"}
-    ]
-    
-    stage_specific = {
-        "天使轮": [],
-        "Pre-A": [
-            {"item": "现金流预测及资金使用计划", "importance": "高", "status": "待核查"}
-        ],
-        "A轮": [
-            {"item": "现金流预测及资金使用计划", "importance": "高", "status": "待核查"},
-            {"item": "毛利率分析及同行业对比", "importance": "中", "status": "待核查"},
-            {"item": "应收账款账龄分析", "importance": "中", "status": "待核查"}
-        ],
-        "B轮": [
-            {"item": "现金流预测及资金使用计划", "importance": "高", "status": "待核查"},
-            {"item": "毛利率分析及同行业对比", "importance": "中", "status": "待核查"},
-            {"item": "应收账款账龄分析", "importance": "中", "status": "待核查"},
-            {"item": "分产品线/区域收入明细", "importance": "中", "status": "待核查"},
-            {"item": "成本结构分析及优化空间", "importance": "中", "status": "待核查"}
-        ]
-    }
-    
-    items = base_items + stage_specific.get(stage, [])
-    
-    return {
-        "category": "财务尽调",
-        "item_count": len(items),
-        "high_priority": len([i for i in items if i["importance"] == "高"]),
-        "items": items
-    }
+def _required_text(value: str, label: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{label} 不能为空。")
+    if len(normalized) > 200:
+        raise ValueError(f"{label} 不能超过 200 个字符。")
+    return normalized
 
 
-def generate_business_dd(stage: str) -> Dict:
-    """生成业务尽调清单"""
-    
-    base_items = [
-        {"item": "核心团队背景调查", "importance": "高", "status": "待核查"},
-        {"item": "商业模式验证", "importance": "高", "status": "待核查"},
-        {"item": "产品/服务技术验证", "importance": "高", "status": "待核查"},
-        {"item": "核心客户访谈（至少3家）", "importance": "高", "status": "待核查"},
-        {"item": "竞品分析报告", "importance": "高", "status": "待核查"},
-        {"item": "市场规模及增长验证", "importance": "中", "status": "待核查"},
-        {"item": "渠道及合作伙伴调研", "importance": "中", "status": "待核查"}
-    ]
-    
-    stage_specific = {
-        "天使轮": [],
-        "Pre-A": [
-            {"item": "用户留存及活跃度数据", "importance": "高", "status": "待核查"},
-            {"item": "获客成本及渠道效率", "importance": "高", "status": "待核查"}
-        ],
-        "A轮": [
-            {"item": "用户留存及活跃度数据", "importance": "高", "status": "待核查"},
-            {"item": "获客成本及渠道效率", "importance": "高", "status": "待核查"},
-            {"item": "单位经济模型验证", "importance": "高", "status": "待核查"},
-            {"item": "关键岗位人员访谈", "importance": "中", "status": "待核查"}
-        ],
-        "B轮": [
-            {"item": "用户留存及活跃度数据", "importance": "高", "status": "待核查"},
-            {"item": "获客成本及渠道效率", "importance": "高", "status": "待核查"},
-            {"item": "单位经济模型验证", "importance": "高", "status": "待核查"},
-            {"item": "关键岗位人员访谈", "importance": "中", "status": "待核查"},
-            {"item": "行业专家访谈", "importance": "中", "status": "待核查"},
-            {"item": "供应链/运营实地考察", "importance": "中", "status": "待核查"}
-        ]
-    }
-    
-    items = base_items + stage_specific.get(stage, [])
-    
-    return {
-        "category": "业务尽调",
-        "item_count": len(items),
-        "high_priority": len([i for i in items if i["importance"] == "高"]),
-        "items": items
-    }
-
-
-def generate_dd_checklist(stage: str) -> Dict:
-    """生成完整尽调清单"""
-    
-    legal = generate_legal_dd(stage)
-    financial = generate_financial_dd(stage)
-    business = generate_business_dd(stage)
-    
-    total_items = legal["item_count"] + financial["item_count"] + business["item_count"]
-    high_priority_items = legal["high_priority"] + financial["high_priority"] + business["high_priority"]
-    
-    return {
-        "generated_at": datetime.now().isoformat(),
+def generate_dd_checklist(
+    stage: str,
+    jurisdiction: str,
+    industry: str,
+    transaction_structure: str,
+) -> dict[str, Any]:
+    if stage not in STAGES:
+        raise ValueError("stage 不在支持列表中。")
+    context = {
         "stage": stage,
+        "jurisdiction": _required_text(jurisdiction, "jurisdiction"),
+        "industry": _required_text(industry, "industry"),
+        "transaction_structure": _required_text(transaction_structure, "transaction_structure"),
+    }
+    checklists: dict[str, list[dict[str, str]]] = {}
+    for category, base_items in COMMON_ITEMS.items():
+        items = [*base_items, *STAGE_ADDITIONS.get(stage, {}).get(category, [])]
+        checklists[category] = [
+            {
+                "id": f"{category}.{item_id}",
+                "review_question": question,
+                "status": "not_reviewed",
+                "applicability": "confirm",
+                "evidence": "",
+                "reviewer_notes": "",
+            }
+            for item_id, question in items
+        ]
+    return {
+        "template_version": TEMPLATE_VERSION,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "context": context,
         "summary": {
-            "total_items": total_items,
-            "high_priority": high_priority_items,
-            "categories": 3
+            "item_count": sum(len(items) for items in checklists.values()),
+            "categories": list(checklists),
+            "reviewed_count": 0,
         },
-        "checklists": {
-            "legal": legal,
-            "financial": financial,
-            "business": business
-        },
-        "timeline": generate_dd_timeline(stage),
-        "key_focus": generate_key_focus(stage)
+        "checklists": checklists,
+        "template_notice": (
+            "这是通用起点模板，不表示任何项目已通过核验，也不构成法律、税务、会计、"
+            "技术、网络安全或投资意见。适用性、证据标准、负责人和时间表必须由交易团队及相应专业人士确认。"
+        ),
+        "required_customization": [
+            "按法域和监管要求增删项目",
+            "按行业、数据处理活动和许可证要求增删项目",
+            "按交易结构、证券权利和融资文件增删项目",
+            "为每项填写证据、统计期、来源、审阅人和结论",
+        ],
     }
 
 
-def generate_dd_timeline(stage: str) -> List[Dict]:
-    """生成尽调时间线"""
-    
-    timelines = {
-        "天使轮": [
-            {"week": "第1周", "task": "业务尽调（团队+产品+客户）", "owner": "投资经理"},
-            {"week": "第2周", "task": "法律+财务基础尽调", "owner": "法务+财务顾问"},
-            {"week": "第3周", "task": "尽调报告及投资决策", "owner": "投资委员会"}
-        ],
-        "Pre-A": [
-            {"week": "第1周", "task": "业务尽调（团队+产品+客户+数据）", "owner": "投资经理"},
-            {"week": "第2周", "task": "财务尽调", "owner": "财务顾问"},
-            {"week": "第3周", "task": "法律尽调", "owner": "法务顾问"},
-            {"week": "第4周", "task": "尽调报告及投资决策", "owner": "投资委员会"}
-        ],
-        "A轮": [
-            {"week": "第1-2周", "task": "业务尽调（深度）", "owner": "投资团队"},
-            {"week": "第2-3周", "task": "财务尽调（审计）", "owner": "会计师事务所"},
-            {"week": "第3-4周", "task": "法律尽调（律师）", "owner": "律师事务所"},
-            {"week": "第5周", "task": "尽调报告及投资决策", "owner": "投资委员会"}
-        ],
-        "B轮": [
-            {"week": "第1-2周", "task": "业务尽调（深度+行业专家）", "owner": "投资团队"},
-            {"week": "第2-4周", "task": "财务尽调（全面审计）", "owner": "四大会计师事务所"},
-            {"week": "第3-5周", "task": "法律尽调（全面）", "owner": "知名律师事务所"},
-            {"week": "第6周", "task": "尽调报告及投资决策", "owner": "投资委员会"}
-        ]
-    }
-    
-    return timelines.get(stage, timelines["天使轮"])
-
-
-def generate_key_focus(stage: str) -> List[str]:
-    """生成重点关注事项"""
-    
-    focus = {
-        "天使轮": [
-            "团队背景真实性",
-            "产品/技术可行性",
-            "商业模式初步验证",
-            "股权结构清晰度"
-        ],
-        "Pre-A": [
-            "用户数据真实性",
-            "获客成本合理性",
-            "收入增长趋势",
-            "核心团队稳定性"
-        ],
-        "A轮": [
-            "财务数据真实性",
-            "单位经济模型健康度",
-            "市场竞争格局",
-            "法律合规性"
-        ],
-        "B轮": [
-            "盈利能力路径",
-            "规模化扩张可行性",
-            "海外合规（如有）",
-            "退出路径清晰度"
-        ]
-    }
-    
-    return focus.get(stage, focus["天使轮"])
-
-
-def format_checklist(checklist: Dict) -> str:
-    """格式化尽调清单（投资官六段式）"""
-    
-    s = checklist["summary"]
-    
+def format_checklist(checklist: dict[str, Any]) -> str:
+    context = checklist["context"]
     lines = [
-        "=" * 60,
-        f"{checklist['stage']}尽职调查清单",
-        "=" * 60,
+        f"# {context['stage']}尽职调查起点清单",
         "",
-        "## 🧭 投资官视角",
+        f"- 模板版本：{checklist['template_version']}",
+        f"- 生成时间（UTC）：{checklist['generated_at_utc']}",
+        f"- 法域：{context['jurisdiction']}",
+        f"- 行业：{context['industry']}",
+        f"- 交易结构：{context['transaction_structure']}",
         "",
-        "### 一、核心结论",
-        f"【尽调项目】共{s['total_items']}项（高优先级{s['high_priority']}项）",
-        f"【尽调维度】法律 + 财务 + 业务",
-        f"【预计周期】{len(checklist['timeline'])}周",
+        f"> {checklist['template_notice']}",
         "",
-        "### 二、背后逻辑",
-        "尽职调查是投资前的'体检'，目的是：",
-        "• 验证商业计划的真实性",
-        "• 发现潜在风险和问题",
-        "• 为估值谈判提供依据",
-        "• 设计交易条款的基础",
+        "## 使用前必须定制",
         "",
-        "### 三、风险在哪里",
-        "⚠️ 数据造假风险：收入、用户数等关键指标可能虚报",
-        "⚠️ 法律风险：知识产权纠纷、股权争议、合规问题",
-        "⚠️ 团队风险：核心人员稳定性、竞业禁止",
-        "⚠️ 市场风险：竞争格局变化、政策风险",
-        "",
-        "### 四、适合谁",
-        "• 准备投资创业项目的机构或个人",
-        "• 投资金额超过100万的风险投资",
-        "• 需要全面了解被投企业的投资者",
-        "",
-        "### 五、操作策略",
-        "",
-        "【尽调时间线】",
     ]
-    
-    for item in checklist["timeline"]:
-        lines.append(f"• {item['week']}: {item['task']} ({item['owner']})")
-    
-    lines.extend([
-        "",
-        "【重点关注】",
-    ])
-    
-    for focus in checklist["key_focus"]:
-        lines.append(f"• {focus}")
-    
-    lines.extend([
-        "",
-        "【法律尽调清单】",
-        f"共{checklist['checklists']['legal']['item_count']}项（高优先级{checklist['checklists']['legal']['high_priority']}项）",
-    ])
-    
-    for item in checklist["checklists"]["legal"]["items"]:
-        priority_mark = "【高】" if item["importance"] == "高" else ""
-        lines.append(f"□ {item['item']} {priority_mark}")
-    
-    lines.extend([
-        "",
-        "【财务尽调清单】",
-        f"共{checklist['checklists']['financial']['item_count']}项（高优先级{checklist['checklists']['financial']['high_priority']}项）",
-    ])
-    
-    for item in checklist["checklists"]["financial"]["items"]:
-        priority_mark = "【高】" if item["importance"] == "高" else ""
-        lines.append(f"□ {item['item']} {priority_mark}")
-    
-    lines.extend([
-        "",
-        "【业务尽调清单】",
-        f"共{checklist['checklists']['business']['item_count']}项（高优先级{checklist['checklists']['business']['high_priority']}项）",
-    ])
-    
-    for item in checklist["checklists"]["business"]["items"]:
-        priority_mark = "【高】" if item["importance"] == "高" else ""
-        lines.append(f"□ {item['item']} {priority_mark}")
-    
-    lines.extend([
-        "",
-        "### 六、如果判断错了",
-        "• 如尽调发现重大问题，及时终止投资或大幅压低估值",
-        "• 如尽调时间不足，优先完成高优先级项目",
-        "• 如对方不配合尽调，视为重大风险信号",
-        "• 建议聘请专业第三方机构（律师、会计师）协助尽调",
-        "",
-        "=" * 60,
-        f"生成时间：{checklist['generated_at']}",
-        "=" * 60
-    ])
-    
+    lines.extend(f"- {item}" for item in checklist["required_customization"])
+    category_names = {"legal": "法律与合规", "financial": "财务与税务", "business": "业务、技术与运营"}
+    for category, items in checklist["checklists"].items():
+        lines.extend(["", f"## {category_names[category]}", ""])
+        for item in items:
+            lines.append(f"- [ ] `{item['id']}` {item['review_question']}（适用性：待确认；证据：待填写）")
+    lines.extend(
+        [
+            "",
+            "## 完成条件",
+            "",
+            "只有在逐项确认适用性、记录可追溯证据并由有权限的审阅人签署后，才能更新状态；生成本文件不等于完成尽调。",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="尽职调查清单生成器")
-    parser.add_argument("--stage", type=str, required=True,
-                       choices=["天使轮", "Pre-A", "A轮", "B轮"],
-                       help="投资阶段")
-    parser.add_argument("--output", type=str, help="输出文件路径")
-    parser.add_argument("--json", action="store_true", help="JSON格式输出")
-    
-    args = parser.parse_args()
-    
-    checklist = generate_dd_checklist(args.stage)
-    
-    if args.json:
-        output = json.dumps(checklist, ensure_ascii=False, indent=2)
-        print(output)
-    elif args.output:
-        with open(args.output, 'w', encoding='utf-8') as f:
-            f.write(format_checklist(checklist))
-        print(f"尽调清单已保存到: {args.output}")
-    else:
-        print(format_checklist(checklist))
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="尽职调查通用起点清单生成器")
+    parser.add_argument("--stage", required=True, choices=STAGES, help="融资阶段，仅用于选择模板增量")
+    parser.add_argument("--jurisdiction", required=True, help="需要核验的法域")
+    parser.add_argument("--industry", required=True, help="项目行业")
+    parser.add_argument("--transaction-structure", required=True, help="股权、可转债等交易结构")
+    parser.add_argument("--output", help="输出文件路径")
+    parser.add_argument("--json", action="store_true", help="输出 JSON；默认输出 Markdown")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        checklist = generate_dd_checklist(
+            args.stage,
+            args.jurisdiction,
+            args.industry,
+            args.transaction_structure,
+        )
+        output = json.dumps(checklist, ensure_ascii=False, indent=2) if args.json else format_checklist(checklist)
+        if args.output:
+            path = Path(args.output).expanduser().resolve()
+            path.write_text(output + "\n", encoding="utf-8")
+            print(f"尽调起点清单已保存到：{path}")
+        else:
+            print(output)
+        return 0
+    except (OSError, ValueError) as exc:
+        payload = json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)
+        print(payload if args.json else f"清单生成失败：{exc}", file=sys.stdout if args.json else sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

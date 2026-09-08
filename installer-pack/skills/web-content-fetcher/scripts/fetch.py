@@ -16,10 +16,8 @@
   图片使用原始 URL 内嵌在 Markdown 中（data-src 懒加载已自动处理）
 """
 
-import sys
+import argparse
 import re
-import html2text
-from scrapling.fetchers import Fetcher
 
 
 def fix_lazy_images(html_raw):
@@ -37,6 +35,16 @@ def fix_lazy_images(html_raw):
 
 
 def scrapling_fetch(url, max_chars=30000):
+    try:
+        import html2text
+        from scrapling.fetchers import Fetcher
+    except ImportError as exc:
+        missing = getattr(exc, "name", None) or "optional package"
+        raise RuntimeError(
+            f"Optional batch-fetch dependency is missing: {missing}. "
+            "Install the locked web-content-fetcher runtime or use Codex native web reading."
+        ) from exc
+
     page = Fetcher(auto_match=False).get(
         url,
         headers={"Referer": "https://www.google.com/search?q=site"}
@@ -78,13 +86,22 @@ def scrapling_fetch(url, max_chars=30000):
     return md[:max_chars], 'body(fallback)'
 
 
-if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("用法: python fetch.py <url> [max_chars]", file=sys.stderr)
-        sys.exit(1)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="使用可选 Scrapling/html2text 运行时提取网页正文；没有依赖时改用 Codex 原生网页读取。"
+    )
+    parser.add_argument("url", nargs="?", help="要提取的 HTTP(S) URL")
+    parser.add_argument("max_chars", nargs="?", type=int, default=30000, help="最大输出字符数，默认 30000")
+    return parser.parse_args()
 
-    url = sys.argv[1]
-    max_chars = int(sys.argv[2]) if len(sys.argv) > 2 else 30000
 
-    text, selector = scrapling_fetch(url, max_chars)
+def main():
+    args = parse_args()
+    if not args.url:
+        raise SystemExit("URL is required. Run with --help for usage.")
+    text, _selector = scrapling_fetch(args.url, args.max_chars)
     print(text)
+
+
+if __name__ == '__main__':
+    main()

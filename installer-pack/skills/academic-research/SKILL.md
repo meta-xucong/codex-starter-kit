@@ -242,12 +242,13 @@ description: 学术文献检索与研究支持。执行文献检索、引用校�
 
 ## 数据来源
 
-> ⚠️ **所有网络搜索必须使用 `web-search-extraction` 技能**
+联网检索时优先使用当前 Codex 会话提供的网页搜索/浏览能力，并打开原始页面核验作者、年份、DOI、期刊和版本。
+如果当前会话没有网页能力，只分析用户提供的论文、链接和文件，并明确说明无法实时核验。不要编造检索结果、引用量或数据库访问权限。
 
-- **中文数据库**：知网、万方、维普（使用 `web-search-extraction` 访问）
-- **英文数据库**：Google Scholar、PubMed、IEEE Xplore、arXiv（使用 `web-search-extraction` 访问）
-- **开放获取**：ResearchGate、Academia.edu、机构库（使用 `web-search-extraction` 访问）
-- **引用工具**：Google Scholar引用、Crossref、Web of Science（使用 `web-search-extraction` 访问）
+- **中文数据库**：知网、万方、维普（遵守登录与访问权限）
+- **英文数据库**：Google Scholar、PubMed、IEEE Xplore、arXiv
+- **开放获取**：ResearchGate、Academia.edu、机构库
+- **引用信息**：Crossref、期刊官网、出版社页面和公开引用索引
 
 ---
 

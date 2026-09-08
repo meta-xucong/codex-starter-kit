@@ -385,6 +385,6 @@ if __name__ == "__main__":
     if args.output:
         with open(args.output, 'w') as f:
             json.dump(plan, f, indent=2)
-        print(f"✓ Travel plan generated: {args.output}")
+        print(f"Travel plan generated: {args.output}")
     else:
         print(json.dumps(plan, indent=2))
