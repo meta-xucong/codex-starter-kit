@@ -1,12 +1,12 @@
 {
   "schemaVersion": 3,
   "releaseGate": {
-    "materializationStatus": "pending",
-    "installReady": false,
-    "rule": "No runtime-dependent Skill, MCP or API adapter may be reported as install-ready until the private media manifest contains exact bytes, SHA-256, signature/provenance evidence and a passing health check."
+    "materializationStatus": "ready",
+    "installReady": true,
+    "rule": "Bundled Windows x64 media is accepted only when every artifact has exact bytes, SHA-256, source/provenance evidence and a passing offline health check. Credentials and tenant authorization remain first-run configuration."
   },
   "policy": {
-    "starterKitContains": "metadata, direct inputs, lock contracts and verification instructions only",
+    "starterKitContains": "metadata, source inputs, bundled Windows x64 media, lock contracts and verification instructions",
     "installerOwns": "offline media, exact artifact hashes, Authenticode verification, package materialization, installation and rollback",
     "pythonStrategy": {
       "choice": "per-user-cpython-3.12-x64",
@@ -21,8 +21,8 @@
   "artifacts": [
     {
       "artifactId": "runtime.python312",
-      "materializationStatus": "pending",
-      "installReady": false,
+      "materializationStatus": "ready",
+      "installReady": true,
       "purpose": "CPython runtime for local data, document, PDF, media and optional stateful Skills",
       "relatedSkills": ["china-stock-analysis", "data-assistant", "docx-butler", "excel-xlsx", "fitness-coach", "fund-portfolio", "macro-research", "meal-planner", "pdf-processing-toolkit", "powerpoint-pptx", "travel-planner", "venture-analysis", "wealth-allocation", "wechat-article-creator", "word-docx", "image-2", "seedance2-0-video-gen", "web-search-extraction"],
       "required": true,
@@ -41,10 +41,10 @@
         "bytes": 26964224
       },
       "integrity": {
-        "materializationStatus": "pending",
-        "sha256": null,
-        "sha256Source": "Download the directUrl during private media build, compare the release-side checksum/signature evidence, and record the value in the private media lock.",
-        "authenticode": {"required": true, "publisher": "Python Software Foundation", "evidence": "Get-AuthenticodeSignature plus trusted signer chain"}
+        "materializationStatus": "ready",
+        "sha256": "67b5635e80ea51072b87941312d00ec8927c4db9ba18938f7ad2d27b328b95fb",
+        "sha256Source": "SHA-256 of runtime/bundled/python-3.12.10-amd64.exe; downloaded from the official Python release URL.",
+        "authenticode": {"required": true, "publisher": "Python Software Foundation", "evidence": "Get-AuthenticodeSignature returned Valid on the bundled installer."}
       },
       "install": {
         "silentArgs": "/quiet InstallAllUsers=0 PrependPath=0 Include_test=0",
@@ -59,8 +59,8 @@
     },
     {
       "artifactId": "runtime.python312-wheelhouse",
-      "materializationStatus": "pending",
-      "installReady": false,
+      "materializationStatus": "ready",
+      "installReady": true,
       "purpose": "Complete offline Python wheelhouse for Skills that retain real Python functionality",
       "relatedSkills": ["china-stock-analysis", "data-assistant", "docx-butler", "excel-xlsx", "fitness-coach", "fund-portfolio", "macro-research", "meal-planner", "pdf-processing-toolkit", "powerpoint-pptx", "travel-planner", "venture-analysis", "wealth-allocation", "wechat-article-creator", "word-docx", "web-content-fetcher", "image-2", "seedance2-0-video-gen", "web-search-extraction"],
       "required": false,
@@ -70,13 +70,13 @@
         "directRequirements": "runtime/requirements-python-win-x64-py312.in",
         "materializer": "runtime/materialize-python-wheelhouse.ps1",
         "indexPolicy": "approved package index; record the index URL and timestamp in the private media manifest",
-        "archiveFilename": "codex-python312-win-x64-wheelhouse.zip",
-        "archiveBytes": null
+        "archiveFilename": "runtime/bundled/python-wheels/",
+        "archiveBytes": 85236661
       },
       "integrity": {
-        "materializationStatus": "pending",
+        "materializationStatus": "ready",
         "sha256": null,
-        "sha256Source": "Private media build must hash the final archive and every wheel; the generated wheelhouse-manifest.json is the machine-readable evidence.",
+        "sha256Source": "Each of the 52 bundled wheels has an individual SHA-256 in runtime/bundled/python-wheelhouse-manifest.json and is verified before installation.",
         "authenticode": {"required": false, "evidence": "per-wheel SHA-256, PyPI/index provenance and signed media manifest"}
       },
       "install": {
@@ -91,48 +91,51 @@
     },
     {
       "artifactId": "runtime.node20-feishu-optional",
-      "materializationStatus": "pending",
-      "installReady": false,
+      "materializationStatus": "ready",
+      "installReady": true,
       "purpose": "Optional Node.js runtime for the locked official Feishu/Lark MCP package",
       "relatedSkills": ["feishu-doc", "feishu-drive", "feishu-perm", "feishu-wiki"],
       "required": false,
       "optional": true,
       "source": {
-        "directUrl": "https://nodejs.org/dist/v20.20.0/node-v20.20.0-x64.msi",
+        "directUrl": "https://nodejs.org/dist/v20.20.0/node-v20.20.0-win-x64.zip",
         "checksumUrl": "https://nodejs.org/dist/v20.20.0/SHASUMS256.txt",
         "productVersion": "20.20.0",
         "architecture": "x64",
-        "filename": "node-v20.20.0-x64.msi",
-        "bytes": null
+        "filename": "node-v20.20.0-win-x64.zip",
+        "bytes": 29902899
       },
       "integrity": {
-        "materializationStatus": "pending",
-        "sha256": null,
-        "sha256Source": "Private media build must resolve the direct URL against the official SHASUMS256.txt and record Authenticode evidence.",
-        "authenticode": {"required": true, "publisher": "Node.js / OpenJS Foundation", "evidence": "Get-AuthenticodeSignature plus trusted signer chain"}
+        "materializationStatus": "ready",
+        "sha256": "32f24e1405b113d4e01ad2585c92024df673b6156ef6f43a5469a75bf52c0a5a",
+        "sha256Source": "SHA-256 of runtime/bundled/node-v20.20.0-win-x64.zip; matches the official Node.js SHASUMS256.txt.",
+        "authenticode": {"required": false, "publisher": "Node.js / OpenJS Foundation", "evidence": "Official SHASUMS256.txt plus exact archive hash; ZIP archives do not carry Authenticode signatures."}
       },
-      "install": {"silentArgs": "/qn /norestart", "acceptedReturnCodes": [0, 3010], "timeoutSeconds": 300, "scope": "approved user or machine scope", "path": "user PATH only after confirmation"},
+      "install": {"method": "extract-per-user", "archive": "runtime/bundled/node-v20.20.0-win-x64.zip", "scope": "current-user", "path": "User-local runtime pointer and PATH entry; no administrator elevation."},
       "healthCheck": "node --version; npm --version; npm exec --offline --prefix <private-feishu-cache> -- @larksuiteoapi/lark-mcp@0.5.1 mcp --help",
       "offlineConstraint": "Never use npx --yes for a health check or enabled Codex configuration. The package must already be present in the private cache and npm must run with --offline.",
       "uninstallUpgrade": "Manage through Windows installed apps; upgrade Node and the MCP package together under a new media lock."
     },
     {
       "artifactId": "runtime.feishu-mcp-package",
-      "materializationStatus": "pending",
-      "installReady": false,
+      "materializationStatus": "ready",
+      "installReady": true,
       "purpose": "Offline npm package cache for the official Feishu/Lark MCP",
       "package": {"name": "@larksuiteoapi/lark-mcp", "version": "0.5.1", "license": "MIT", "nodeEngine": ">=20.0.0", "bin": "lark-mcp"},
       "source": {
         "tarballUrl": "https://registry.npmjs.org/@larksuiteoapi/lark-mcp/-/lark-mcp-0.5.1.tgz",
         "packageJsonUrl": "https://registry.npmjs.org/@larksuiteoapi/lark-mcp/0.5.1",
-        "integrity": null
+        "integrity": "bundled package-lock.json preserves npm integrity for the 195-package closure",
+        "bundleFilename": "runtime/bundled/feishu-node-modules.zip",
+        "bundleBytes": 12898130,
+        "bundleSha256": "cbf988b8a1f1b9da7e8df418755b68d052961ff7e06881d4097dabbe76c36b9d"
       },
       "install": {
         "command": "npm install --offline --ignore-scripts --prefix <private-feishu-cache> <locked-local-tarball>",
         "healthCheck": "npm exec --offline --prefix <private-feishu-cache> -- @larksuiteoapi/lark-mcp@0.5.1 mcp --help",
         "configCommand": "Use the private wrapper command from config-fragments/feishu-official-stdio.template.toml; do not put App Secret in Codex TOML."
       },
-      "offlineConstraint": "The public kit does not ship the npm tarball or its transitive npm closure. Until a private media lock records every tarball integrity value and the offline cache health check passes, Feishu remains guided-config and disabled."
+      "offlineConstraint": "The bundled ZIP contains the locked npm node_modules closure and package-lock.json. The installer extracts it without network access; Feishu still remains disabled until credentials and tenant permissions are supplied."
     }
   ]
 }

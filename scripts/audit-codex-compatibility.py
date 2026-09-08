@@ -310,7 +310,19 @@ def check_audit_statuses(audit: Audit) -> None:
     if not pdf or pdf.get("afterRemediationStatus") != "unsupported":
         audit.error("pdf-processing-toolkit must remain unsupported until redistribution evidence is approved.")
     else:
-        pdf_text = (audit.root / "skills" / "pdf-processing-toolkit" / "SKILL.md").read_text(encoding="utf-8").casefold()
+        redistribution = pdf.get("redistribution", {})
+        if redistribution.get("status") != "quarantined-stub-only":
+            audit.error("pdf-processing-toolkit must declare a quarantined-stub-only redistribution status.")
+        if redistribution.get("sourceBodyIncluded") is not False:
+            audit.error("pdf-processing-toolkit must not include the imported source body.")
+        pdf_path = audit.root / "skills" / "pdf-processing-toolkit" / "SKILL.md"
+        pdf_text = pdf_path.read_text(encoding="utf-8").casefold() if pdf_path.is_file() else ""
+        marker = str(redistribution.get("publicStubMarker", "")).casefold()
+        max_bytes = redistribution.get("maxPublicStubBytes")
+        if not marker or marker not in pdf_text:
+            audit.error("pdf-processing-toolkit lacks the fixed public quarantine marker.")
+        if not isinstance(max_bytes, int) or max_bytes <= 0 or pdf_path.stat().st_size > max_bytes:
+            audit.error("pdf-processing-toolkit public quarantine stub exceeds its declared size limit.")
         if "license" not in pdf_text and "许可证" not in pdf_text:
             audit.error("pdf-processing-toolkit lacks an explicit redistribution warning.")
     audit.metrics["statusCounts"] = status_counts
@@ -516,7 +528,14 @@ def check_local_write_boundaries(audit: Audit) -> None:
         audit.root / "skills" / "china-stock-analysis" / ".cache",
     ):
         if generated_directory.exists():
-            audit.error(f"Generated user state is present inside a Skill tree: {generated_directory.relative_to(audit.root).as_posix()}")
+            message = f"Generated user state is present inside a Skill tree: {generated_directory.relative_to(audit.root).as_posix()}"
+            # The working source tree may contain user-authored drafts/output from
+            # earlier runs. build-pack.py excludes these transient directories;
+            # a generated installer-pack must never contain them.
+            if audit.root.name.lower() == "installer-pack":
+                audit.error(message)
+            else:
+                audit.warn(message + " (excluded from the generated installer pack)")
 
     if len(audit.errors) == errors_before:
         audit.passed("Local state remains outside installed Skills and placeholder entrypoints are removed")
@@ -894,6 +913,8 @@ def check_pack(audit: Audit) -> None:
     pack = load_json(pack_path)
     if not re.fullmatch(r"[0-9a-f]{40}", str(pack.get("sourceCommit", ""))):
         audit.error("pack.json sourceCommit is not a 40-character commit.")
+    if str(pack.get("sourceCommitRole", "")) not in {"build-input", "upstream-base"}:
+        audit.error("pack.json sourceCommitRole must be build-input or upstream-base.")
     if not re.fullmatch(r"[0-9a-f]{64}", str(pack.get("sourceTreeSha256", ""))):
         audit.error("pack.json sourceTreeSha256 is not a SHA-256 digest.")
     file_manifest_path = audit.root / "file-manifest.json"

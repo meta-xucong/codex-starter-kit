@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string]$OutputRoot,
     [string]$InputFile,
     [string]$PythonExe = '' ,
-    [string]$IndexUrl
+    [string]$IndexUrl,
+    [string[]]$FindLinks = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,5 +23,10 @@ if ($LASTEXITCODE -ne 0 -or $probeOutput -notmatch '^3\.12\.\d+\|cpython-312\|wi
 $script = Join-Path $PSScriptRoot 'materialize-python-wheelhouse.py'
 $arguments = @($script, '--input', (Resolve-Path -LiteralPath $InputFile).Path, '--output', $OutputRoot, '--python', $PythonExe)
 if (-not [string]::IsNullOrWhiteSpace($IndexUrl)) { $arguments += @('--index-url', $IndexUrl) }
+foreach ($findLink in $FindLinks) {
+    if ([string]::IsNullOrWhiteSpace($findLink)) { continue }
+    if (-not (Test-Path -LiteralPath $findLink -PathType Container)) { throw "Find-links directory does not exist: $findLink" }
+    $arguments += @('--find-links', (Resolve-Path -LiteralPath $findLink).Path)
+}
 & $PythonExe @arguments
 if ($LASTEXITCODE -ne 0) { throw 'Wheelhouse materialization failed.' }

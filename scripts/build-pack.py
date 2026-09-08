@@ -326,10 +326,10 @@ def pack_files() -> list[Path]:
     return sorted(path for path in PACK.rglob("*") if path.is_file())
 
 
-def source_commit() -> str:
+def git_head_commit() -> str | None:
     try:
         result = subprocess.run(
-            ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD^{commit}"],
             capture_output=True,
             text=True,
             check=True,
@@ -339,6 +339,13 @@ def source_commit() -> str:
             return commit.lower()
     except (OSError, subprocess.CalledProcessError):
         pass
+    return None
+
+
+def source_commit() -> str:
+    commit = git_head_commit()
+    if commit:
+        return commit
     lock = ROOT / "manifest" / "source-commit.txt"
     if lock.is_file():
         commit = lock.read_text(encoding="utf-8").strip()
@@ -349,7 +356,10 @@ def source_commit() -> str:
 
 
 def source_commit_role() -> str:
-    return "git-head" if (ROOT / ".git").exists() else "upstream-base"
+    # A generated pack cannot record the hash of the commit that contains the
+    # generated pack without a circular self-reference.  The commit is the
+    # build-input pointer; sourceTreeSha256 is the exact reproducible identity.
+    return "build-input" if git_head_commit() else "upstream-base"
 
 
 def source_tree_sha256() -> str:
@@ -393,6 +403,36 @@ def checksum_lines() -> list[str]:
     return lines
 
 
+def verify_pack_provenance() -> dict:
+    """Verify generated metadata without rebuilding or mutating the pack."""
+    pack_path = PACK / "pack.json"
+    if not pack_path.is_file():
+        raise SystemExit("installer-pack/pack.json is missing")
+    pack = read_json(pack_path)
+    commit = str(pack.get("sourceCommit", ""))
+    role = str(pack.get("sourceCommitRole", ""))
+    tree_hash = str(pack.get("sourceTreeSha256", ""))
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise SystemExit("pack.json sourceCommit must be a 40-character lowercase Git commit")
+    if role not in {"build-input", "upstream-base"}:
+        raise SystemExit(f"pack.json sourceCommitRole is invalid: {role!r}")
+    if not re.fullmatch(r"[0-9a-f]{64}", tree_hash):
+        raise SystemExit("pack.json sourceTreeSha256 must be a 64-character lowercase SHA-256")
+    expected_tree_hash = source_tree_sha256()
+    if tree_hash != expected_tree_hash:
+        raise SystemExit(
+            "Generated pack is stale: "
+            f"pack sourceTreeSha256={tree_hash}, current sourceTreeSha256={expected_tree_hash}. "
+            "Run scripts/build-pack.py --check and commit the generated files."
+        )
+    return {
+        "sourceCommit": commit,
+        "sourceCommitRole": role,
+        "sourceTreeSha256": tree_hash,
+        "verified": True,
+    }
+
+
 def build() -> dict:
     audit = read_json(ROOT / "manifest" / "skill-audit.json")
     agents = read_json(ROOT / "manifest" / "agent-audit.json")
@@ -428,6 +468,9 @@ def build() -> dict:
     for source_name, destination in [
         ("install-to-codex.ps1", PACK / "install-to-codex.ps1"),
         ("render-codex-config.ps1", PACK / "render-codex-config.ps1"),
+        ("configure-codex.ps1", PACK / "configure-codex.ps1"),
+        ("install-all.ps1", PACK / "install-all.ps1"),
+        ("Install-Codex-Starter.cmd", PACK / "Install-Codex-Starter.cmd"),
         ("audit-codex-compatibility.py", PACK / "audit-codex-compatibility.py"),
         ("test-adapter-contracts.py", PACK / "test-adapter-contracts.py"),
         ("start-feishu-mcp.ps1", PACK / "mcp" / "start-feishu-mcp.ps1"),
@@ -435,7 +478,12 @@ def build() -> dict:
         shutil.copy2(ROOT / "scripts" / source_name, destination)
     for relative in ["README.md", "ENVIRONMENT-MCP-INVENTORY.md"]:
         shutil.copy2(ROOT / relative, PACK / relative)
-    for doc_name in ["CODEX-ADAPTATION-DEVELOPMENT.md", "KNOWN-LIMITATIONS.md"]:
+    for doc_name in [
+        "CODEX-ADAPTATION-DEVELOPMENT.md",
+        "KNOWN-LIMITATIONS.md",
+        "POST-MERGE-CORRECTIVE-DEVELOPMENT.md",
+        "FULL-BUNDLE-ONE-CLICK-DEVELOPMENT.md",
+    ]:
         shutil.copy2(ROOT / "docs" / doc_name, PACK / "docs" / doc_name)
     for relative in [
         "imported-skills.txt", "agents.txt", "agent-catalog.md", "source-notes.md",
@@ -480,7 +528,7 @@ def build() -> dict:
         "statuses": sorted(PACK_STATUSES),
         "sourceStatuses": sorted(STATUSES),
         "defaultEnabled": {"skills": default_skills, "agents": default_agents},
-        "sourcePolicy": {"noSecrets":True,"noUserContent":True,"noRuntimeCache":True,"ownedFilesOnly":True,"noGlobalAgentsMd":True},
+        "sourcePolicy": {"noSecrets":True,"noUserContent":True,"bundledRuntimeMedia":True,"noUserRuntimeCache":True,"ownedFilesOnly":True,"noGlobalAgentsMd":True},
         "installOrder": [
             "verify-package-hashes", "install-approved-runtimes", "install-default-skills",
             "install-all-agents", "render-private-connections", "health-check", "reload-codex"
@@ -524,7 +572,13 @@ def build() -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="build the pack and print a summary")
+    parser.add_argument("--verify", action="store_true", help="verify pack provenance without rebuilding")
     args = parser.parse_args()
+    if args.check and args.verify:
+        parser.error("--check and --verify are mutually exclusive")
+    if args.verify:
+        print(json.dumps(verify_pack_provenance(), ensure_ascii=False))
+        return
     result = build()
     print(json.dumps(result, ensure_ascii=False))
 

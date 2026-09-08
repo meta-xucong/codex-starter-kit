@@ -1,8 +1,13 @@
 # 整理与审计说明
 
-当前公开树基于上游 commit `671f2f486ce10825e02ea547e3ce3667062676f0` 整改。构建器在没有
-`.git` 的源码快照中读取 `manifest/source-commit.txt` 作为上游基线，同时计算 `sourceTreeSha256`
-标识实际参与打包的适配源码；两者不能互相替代。
+当前公开树基于上游 commit `671f2f486ce10825e02ea547e3ce3667062676f0` 整改。构建器在有 Git
+时把构建输入的 `HEAD` 记录为 `sourceCommit`，角色标为 `build-input`；没有 `.git` 的源码快照
+则读取 `manifest/source-commit.txt`，角色标为 `upstream-base`。两者都是来源指针，不能替代
+`sourceTreeSha256`。后者才是生成包必须与当前可编辑源码相等的可复现身份；提交生成包后，
+它不要求也不能要求等于包含生成包的最终 commit。
+
+发布前运行 `python scripts/build-pack.py --verify`。该命令只读计算源码树并拒绝过期的
+`installer-pack/`，避免 squash merge 或文档变更后继续发布旧生成物。
 
 本目录记录公开能力包的范围、兼容性和部署边界。内容以功能为中心，不包含个人身份、账号配置或一次性运行状态。
 
@@ -13,14 +18,14 @@
 - Windows 10/11 优先的安装、打包和验证脚本
 - MCP/API 清单、连接字段、无密钥配置模板和环境依赖说明
 - 25 个核心默认安装项、完整依赖闭包与 SHA-256 文件清单
-- Python 运行时直接输入、传递依赖物化脚本、wheelhouse 状态清单和 Windows per-user 安装契约
+- Python 运行时直接输入、CPython 3.12 安装器、52-wheel 离线 wheelhouse、Node/Feishu 介质、逐文件哈希和 Windows per-user 安装契约
 
 ## 明确不纳入
 
 - API Key、Token、Cookie、`.env`、私有 URL 和账号配置
 - 会话历史、记忆数据库、日志、缓存、草稿和生成产物
 - 依赖特定宿主协议的远程画布、设备节点和网关控制
-- 未经用户提供和审查的 MCP Server 可执行文件或运行时二进制
+- 用户秘密不纳入；包内只包含公开且经清单锁定的运行时介质
 
 ## 兼容性原则
 
