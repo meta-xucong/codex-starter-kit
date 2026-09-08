@@ -31,6 +31,10 @@ TRANSIENT_NAMES = {".cache", ".git", ".codex", ".learnings", "drafts", "output",
 # Plain `.lock` files can be deliberate reproducibility contracts (for example the
 # Python requirements lock); cache/database locks are filtered explicitly below.
 TRANSIENT_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
+TEXT_EXTENSIONS = {
+    ".cmd", ".env", ".in", ".json", ".lock", ".md", ".ps1", ".py", ".sha256",
+    ".toml", ".txt", ".yaml", ".yml",
+}
 
 
 def read_json(path: Path):
@@ -326,6 +330,22 @@ def pack_files() -> list[Path]:
     return sorted(path for path in PACK.rglob("*") if path.is_file())
 
 
+def canonical_bytes(path: Path) -> bytes:
+    data = path.read_bytes()
+    if path.suffix.casefold() in TEXT_EXTENSIONS:
+        return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return data
+
+
+def normalize_pack_text_files() -> None:
+    for path in pack_files():
+        if path.suffix.casefold() not in TEXT_EXTENSIONS:
+            continue
+        normalized = canonical_bytes(path)
+        if normalized != path.read_bytes():
+            path.write_bytes(normalized)
+
+
 def git_head_commit() -> str | None:
     try:
         result = subprocess.run(
@@ -388,7 +408,7 @@ def source_tree_sha256() -> str:
             continue
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(hashlib.sha256(path.read_bytes()).digest())
+        digest.update(hashlib.sha256(canonical_bytes(path)).digest())
     return digest.hexdigest()
 
 
@@ -398,7 +418,7 @@ def checksum_lines() -> list[str]:
         relative = path.relative_to(PACK).as_posix()
         if relative == "checksums.sha256":
             continue
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = hashlib.sha256(canonical_bytes(path)).hexdigest()
         lines.append(f"{digest} *{relative}")
     return lines
 
@@ -559,10 +579,11 @@ def build() -> dict:
     }
     write_json(PACK / "pack.json", pack_manifest)
     write_json(PACK / "dependencies.json", build_dependencies(audit, agents))
+    normalize_pack_text_files()
     manifest = []
     for path in pack_files():
         relative = path.relative_to(PACK).as_posix()
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = hashlib.sha256(canonical_bytes(path)).hexdigest()
         manifest.append({"path":relative,"sha256":digest,"bytes":path.stat().st_size,"owned":True})
     write_json(PACK / "file-manifest.json", {"schemaVersion":2,"id":PACK_ID,"version":PACK_VERSION,"hashScope":"all pack files except file-manifest.json and checksums.sha256","files":manifest})
     (PACK / "checksums.sha256").write_text("\n".join(checksum_lines()) + "\n", encoding="utf-8", newline="\n")

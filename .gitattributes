@@ -1,0 +1,6 @@
+# Keep the checksummed capability pack byte-stable across Windows and Unix
+# checkouts. Binary runtime media must never be newline-normalized.
+* text=auto eol=lf
+*.exe binary
+*.whl binary
+*.zip binary
