@@ -8,7 +8,7 @@
 - `agents/`：7 个按功能命名的 Codex Agent TOML。
 - `skills/`：50 个独立 Skill；非核心 Skill 额外带 `agents/openai.yaml`，默认关闭隐式调用，避免缺依赖时误触发。
 - `manifest/`：50 个 Skill 的逐项审计、7 个 Agent 的依赖闭包、运行时、MCP、API 和连接字段契约。
-- `runtime/`：Windows x64 / CPython 3.12 的直接依赖输入、传递依赖物化脚本和 wheelhouse 状态清单；不放二进制。
+- `runtime/`：Windows x64 / CPython 3.12 的直接依赖输入、完整离线 wheelhouse、Node/Feishu 介质、物化脚本和健康检查。
 - `config-fragments/`：无密钥的 Codex MCP、Skill gating 和连接配置模板。
 - `installer-pack/`：由脚本生成、可复制到其他电脑的完整能力包。
 - `scripts/`：构建、契约审计、配置渲染、验收和安装脚本。
@@ -19,12 +19,13 @@
 | 状态 | 数量 | 含义 |
 |---|---:|---|
 | `core-ready` | 25 | 复制后即可使用工作流说明和 Codex 原生能力，默认安装 |
-| `auto-installable-runtime` | 14 | 需要 U 盘运行时安装器提供的 Python 3.12 和离线包 |
+| `auto-installable-runtime` | 14 | 需要安装包提供的 Python 3.12、离线 wheelhouse 和本机健康检查 |
 | `guided-config` | 7 | 需要用户在连接向导中配置 API、MCP 或网络服务 |
 | `unsupported` | 4 | 当前没有可验证的兼容入口或再分发依据，保持禁用 |
 
 默认安装 25 个核心 Skill 和 7 个 Agent。安装其余可配置/可补运行时的 Skill（合计 46 个，仍排除 4 个
-unsupported）使用：
+unsupported）使用 `-IncludeNonDefault`；需要一键装入全部 50 个 Skill 时，直接运行安装包根目录的
+`Install-Codex-Starter.cmd` 或 `install-all.ps1`。
 
 ```powershell
 .\scripts\install-to-codex.ps1 -IncludeNonDefault
@@ -38,8 +39,8 @@ unsupported）使用：
 
 ## 已知限制
 
-- 14 个 `auto-installable-runtime` Skill 的安装与健康检查契约已经完成，但公开仓库尚未携带已物化的 CPython 3.12
-  安装器和完整离线 wheelhouse；它们仍是 `installReady=false`。
+- 14 个 `auto-installable-runtime` Skill 所需的 CPython 3.12、52-wheel 离线依赖闭包、Node.js 20 和 Feishu npm
+  closure 已进入安装包；安装器会在目标机完成哈希校验、隔离环境安装和健康检查。
 - 7 个 `guided-config` Skill 需要真实凭据、模型、端点、飞书租户权限或本地锁定 npm cache；默认不启用，本轮也没有
   使用真实租户或付费 API 做端到端调用。
 - `canvas`、`healthcheck`、`node-connect`、`pdf-processing-toolkit` 共 4 个 Skill 保持禁用，分别受缺失运行时、
@@ -98,11 +99,19 @@ A 股实时与 AkShare 批量入口会记录成功/失败组件；财务分析�
 
 ## Windows 安装
 
-安装能力包本身只需要 PowerShell，不要求目标机预装 Python、Node 或 Git：
+安装能力包本身只需要 Windows PowerShell，不要求目标机预装 Python、Node、npm 或 Git：
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\install-to-codex.ps1
+```
+
+完整一键安装（50 个 Skill、7 个 Agent、运行时、离线依赖和 Codex 配置）：
+
+```powershell
+.\Install-Codex-Starter.cmd
+# 或
+.\install-all.ps1
 ```
 
 安装器只写自己拥有的 Agent/Skill 文件，不覆盖已有同名文件，除非显式加 `-Overwrite`；不会删除其他 Agent、
@@ -119,18 +128,17 @@ Skill 或全局 `AGENTS.md`。它会校验 `file-manifest.json` 与 `checksums.s
 
 ### 运行时策略
 
-需要真实 Python 功能的 Skill 使用 U 盘后续安装器提供的 Windows x64 CPython 3.12.10 per-user 运行时，
-默认安装根为 `%LocalAppData%\Programs\Python\Python312`，不修改系统 PATH；只复用通过 `cpython-312`
-和 `win_amd64` 检查的解释器。`runtime/requirements-python-win-x64-py312.in` 是直接输入，物化脚本会
-生成完整传递依赖、逐 wheel SHA-256 和真正可执行的 `--require-hashes` lock。公开清单当前明确为
-`materializationStatus=pending`，因此运行时尚未标记为 install-ready。具体文件名、签名、返回码、健康检查
-和回滚策略见 [`manifest/runtime-artifacts.json`](manifest/runtime-artifacts.json)。
+需要真实 Python 功能的 Skill 使用安装包提供的 Windows x64 CPython 3.12.10 per-user 运行时和 52 个 wheel，
+默认部署到安装记录下的独立 `runtime/python-env`，不依赖系统 PATH。Node.js 20 和锁定的 Feishu npm closure
+同样从安装包离线解压。安装器会校验介质字节数、SHA-256、Python 签名、wheel lock 和导入探针；具体文件名、
+签名、返回码、健康检查和回滚策略见 [`manifest/runtime-artifacts.json`](manifest/runtime-artifacts.json) 与
+[`docs/FULL-BUNDLE-ONE-CLICK-DEVELOPMENT.md`](docs/FULL-BUNDLE-ONE-CLICK-DEVELOPMENT.md)。
 
 ## MCP、API 与连接配置
 
 三类内容分开管理：
 
-- MCP：当前只登记一个需向导配置的 `feishu` 服务，见 [`manifest/mcp-servers.json`](manifest/mcp-servers.json)。它必须使用已锁定的离线 npm cache 和本机 wrapper；wrapper 只执行 cache 内的 `lark-mcp`，不调用 `npx` 或联网下载。
+- MCP：当前只登记一个需向导配置的 `feishu` 服务，见 [`manifest/mcp-servers.json`](manifest/mcp-servers.json)。安装包携带已锁定的离线 npm closure 和本机 wrapper；wrapper 只执行包内的 `lark-mcp`，不调用 `npx` 或联网下载。
 - 直连 API：DashScope 网页搜索、图像服务、视频服务，见 [`manifest/api-services.json`](manifest/api-services.json)。DashScope 只接受 `compatible-mode/v1` 根地址，并要求显式填写当前可用的联网搜索模型；脚本自行拼接 `/chat/completions`，不保留猜测模型。
 - 连接字段：统一的密钥、端点、认证方式、校验和能力映射，见 [`manifest/connection-fields.json`](manifest/connection-fields.json)。
 
@@ -156,14 +164,20 @@ Agent 只能输出配置步骤或无连接降级结果，不能声称已经访�
 
 ```powershell
 python .\scripts\build-pack.py --check
+python .\scripts\build-pack.py --verify
 python .\scripts\audit-codex-compatibility.py --root . --require-codex
 .\scripts\verify-package.ps1
 ```
 
-验收会重建包，并检查 50 个 Skill、7 个 Agent、当前 Codex 版本、依赖闭包、非核心 Skill 的显式门控、
+`--check` 会重建生成包；`--verify` 是只读 provenance 门禁，会计算当前源码树并拒绝
+`installer-pack/` 来自旧源码的情况。`sourceCommit` 是构建输入来源指针，`sourceTreeSha256`
+才是生成包必须匹配的可复现身份。
+
+验收会检查 50 个 Skill、7 个 Agent、当前 Codex 版本、依赖闭包、非核心 Skill 的显式门控、
 运行时/MCP/API 清单、PowerShell/Python/TOML 语法、哈希、路径安全、旧工具名和疑似密钥；还会执行飞书
-wrapper 脱敏 dry-run、配置渲染、DashScope/Image-2/Seedance 与高时效金融脚本的无网络契约回归、网页抓取帮助入口、天气/复盘/公众号草稿写入边界/技能搜索/运行时探测，以及临时用户目录中的
-隔离安装 smoke test。完整实施依据见 [`docs/CODEX-ADAPTATION-DEVELOPMENT.md`](docs/CODEX-ADAPTATION-DEVELOPMENT.md)。
+ wrapper 脱敏 dry-run、配置渲染、DashScope/Image-2/Seedance 与高时效金融脚本的无网络契约回归、网页抓取帮助入口、天气/复盘/公众号草稿写入边界/技能搜索/运行时探测，以及临时用户目录中的
+隔离安装 smoke test。完整实施依据见 [`docs/CODEX-ADAPTATION-DEVELOPMENT.md`](docs/CODEX-ADAPTATION-DEVELOPMENT.md)，
+合并后 provenance 与公共许可隔离整改见 [`docs/POST-MERGE-CORRECTIVE-DEVELOPMENT.md`](docs/POST-MERGE-CORRECTIVE-DEVELOPMENT.md)。
 
 新增能力时遵循 `installer-pack/pack.json` 的扩展契约：登记 Skill 或 Agent 及其依赖，MCP/API 与连接字段
 分开登记，运行时只提交锁文件和可审计元数据，然后重新构建和验收。

@@ -15,8 +15,8 @@
 
 官方实现已经足够可靠，可以登记为 `mcp.feishu` 的推荐候选，但它仍是 `guided-config`：
 
-1. Starter Kit 不捆绑 Node.js、npm 包、App Secret 或 OAuth 会话；Node 安装包和 npm tarball/传递依赖都标记为 `pending`，直到私有介质完成锁定。
-2. 安装器只部署包装器与工具清单；第三方 Node/npm 制品必须在私有介质中完成来源、SHA-256、npm integrity 和许可证核验，再放入指定的本地 package cache。包装器禁止 `npx` 和网络下载。
+1. Starter Kit 捆绑经版本和 SHA-256 锁定的 Node.js、npm closure 与 CLI，但不捆绑 App Secret 或 OAuth 会话；安装器只从包内介质离线解压。
+2. 安装器部署包装器与工具清单；Node/npm 制品的来源、SHA-256、npm lock 和许可证信息随运行时 manifest 保存。包装器禁止 `npx` 和网络下载。
 3. 连接板块让用户选择 tenant/user/OAuth 模式并配置应用权限。Codex 的 `env_vars` 只转发 `FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和可选的 `FEISHU_USER_ACCESS_TOKEN`；Secret 不得写入 `config.toml`、日志或安装记录。上游子进程仍会收到 Secret 参数，本机高权限进程检查可能看到它。
 4. 只有离线包、进程环境变量和包装器 dry-run 全部通过后，配置生成器才允许生成 `enabled=true` 的 `[mcp_servers.feishu]`；失败时保持禁用。
 5. 工具名统一使用官方 dot case，并由 `manifest/feishu-tools.json` 锁定。当前文档工具只读；官方实现明确不支持文件上传、文件下载和直接编辑云文档正文。

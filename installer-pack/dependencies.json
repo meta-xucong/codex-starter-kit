@@ -279,6 +279,25 @@
       ]
     },
     {
+      "id": "python.package.Pillow",
+      "kind": "python-package",
+      "required": true,
+      "autoInstallable": true,
+      "packageName": "Pillow",
+      "importName": "PIL",
+      "lockedVersion": "12.3.0",
+      "healthCheck": "python -c \"import PIL\"",
+      "failureMessage": "公众号封面脚本需要 Pillow；离线 wheelhouse 未健康时不得声称封面生成可用。",
+      "dependentCapabilities": [
+        "公众号选题",
+        "文章结构",
+        "标题与封面"
+      ],
+      "dependentSkills": [
+        "wechat-article-creator"
+      ]
+    },
+    {
       "id": "python.package.akshare",
       "kind": "python-package",
       "required": true,
@@ -2292,10 +2311,12 @@
       ],
       "dependencyTypes": [
         "api-service",
+        "python-package",
         "runtime"
       ],
       "dependencies": [
         "runtime.python312",
+        "python.package.Pillow",
         "api.image-2"
       ],
       "dependentCapabilities": [

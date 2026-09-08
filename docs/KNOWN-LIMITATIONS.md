@@ -12,24 +12,24 @@
 | 状态 | 数量 | 当前含义 |
 |---|---:|---|
 | `core-ready` | 25 | 只依赖 Codex 原生能力或说明性工作流，默认安装 |
-| `auto-installable-runtime` | 14 | 代码和安装契约已完成，但公开包尚未携带已物化的 Python 运行时与完整 wheelhouse |
+| `auto-installable-runtime` | 14 | 包内已携带 Windows x64 / CPython 3.12 运行时和完整 wheelhouse，安装时仍需通过本机健康检查 |
 | `guided-config` | 7 | 需要用户提供外部服务、凭据、模型或本地 MCP 包，默认不启用 |
 | `unsupported` | 4 | 缺少可验证运行时、后端协议或再分发依据，保持禁用 |
 
 复制 Skill 或 Agent 文件只代表文件安装完成，不代表运行时、网络、凭据、权限和数据源均已健康。
 
-## 2. 运行时尚未物化
+## 2. 运行时介质与平台边界
 
-公开仓库只包含运行时元数据、直接依赖输入、锁定规则和物化脚本，不包含以下二进制或缓存：
+当前安装包已经包含以下可离线部署介质：
 
 - Windows x64 CPython 3.12.10 安装器；
 - CPython 3.12 / `win_amd64` 的完整离线 wheelhouse；
 - Node.js 20.20.0 安装器；
 - `@larksuiteoapi/lark-mcp@0.5.1` 及其离线 npm 依赖闭包。
 
-这些记录在 [`manifest/runtime-artifacts.json`](../manifest/runtime-artifacts.json) 中仍是
-`materializationStatus=pending`、`installReady=false`。在私有介质记录精确字节数、SHA-256、签名/来源证据并通过
-健康检查前，不能把 14 个 Python Skill 或飞书 MCP 描述为离线安装就绪。
+这些介质的实际文件、字节数和 SHA-256 记录在 [`runtime/bundled/media-manifest.json`](../runtime/bundled/media-manifest.json)、
+[`manifest/runtime-artifacts.json`](../manifest/runtime-artifacts.json) 和安装包的 `checksums.sha256` 中；安装器会在
+部署前重新校验，不能把“文件存在”直接等同为运行时健康。
 
 运行时契约目前只验证 Windows x64、CPython 3.12、`cp312`、`win_amd64`。Python 3.11、3.13、PyPy、Windows
 ARM64、Linux 和 macOS 不在本版本验收矩阵中；不能因为脚本看似可移植就声称这些组合受支持。
@@ -79,10 +79,10 @@ App ID/Secret、飞书侧应用权限和可访问租户。
 | `canvas` | 能力包没有可验证的远程 Canvas 节点或画布运行时 | 提供可审计的运行时、协议、认证和健康检查 |
 | `healthcheck` | 主机加固涉及管理员权限、系统策略和外部设备状态，静态 Skill 不能冒充真实审计 | 建立受控权限模型、逐项探测和可回滚实现 |
 | `node-connect` | 设备配对协议和节点后端不在能力包中 | 提供协议、后端、认证、权限边界和端到端测试 |
-| `pdf-processing-toolkit` | 上游声明专有许可证但缺少被引用的 `LICENSE.txt` | 获得可核验的再分发授权或替换为许可证清晰的实现 |
+| `pdf-processing-toolkit` | 上游声明专有许可证但缺少被引用的 `LICENSE.txt`；公开仓库只保留隔离占位，不含上游指南正文 | 获得可核验的再分发授权，或替换为许可证清晰且由仓库自行维护的实现 |
 
-安装器默认排除这些 Skill。只有同时使用 `-IncludeNonDefault -IncludeUnsupported` 才会复制其隔离审计源码；复制不
-表示支持、授权或启用。
+安装器默认排除这些 Skill。只有同时使用 `-IncludeNonDefault -IncludeUnsupported` 才会复制其隔离占位/审计源码；复制不
+表示支持、授权或启用。PDF 占位也不会恢复任何上游正文或执行能力。
 
 ## 5. 数据源与高风险领域限制
 
@@ -95,9 +95,9 @@ App ID/Secret、飞书侧应用权限和可访问租户。
 
 ## 6. 安装与配置限制
 
-- 安装器默认只安装 25 个 `core-ready` Skill 和 7 个 Agent；
-- `-IncludeNonDefault` 只把可补运行时或可配置的 Skill 扩展到 46 个，不会自动准备运行时或连接凭据；
-- 安装器不自动合并或覆盖用户的 `~/.codex/config.toml`，配置渲染器只生成待人工审阅的片段；
+- 安装器默认只安装 25 个 `core-ready` Skill 和 7 个 Agent；包根目录的 `Install-Codex-Starter.cmd` 会全量安装 50 个 Skill；
+- `-IncludeNonDefault` 会把可补运行时或可配置的 Skill 扩展到 46 个，并自动准备包内运行时；外部连接仍需凭据；
+- 安装器会备份并合并自己的托管配置区块；遇到用户已有未托管的同名 Feishu MCP 时报告冲突，不覆盖用户配置；
 - 遇到同名 Skill、用户修改或用户新增文件时，安装器默认保留并跳过；用户需自行决定是否迁移内容；
 - readiness 报告是本机探测结果，不是跨机器保证；复制安装包到另一台电脑后必须重新执行健康检查；
 - 公开包不读取、备份或恢复用户的真实 Secret、会话、日志、缓存、草稿和生成物。

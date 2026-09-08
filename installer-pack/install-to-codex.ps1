@@ -261,10 +261,14 @@ foreach ($skillName in $skillNames) {
 $supportFiles = @(
     @{ source = 'mcp/start-feishu-mcp.ps1'; destination = (Join-Path $ownershipRoot 'bin\start-feishu-mcp.ps1'); kind = 'mcp-wrapper' },
     @{ source = 'render-codex-config.ps1'; destination = (Join-Path $ownershipRoot 'bin\render-codex-config.ps1'); kind = 'config-renderer' },
+    @{ source = 'configure-codex.ps1'; destination = (Join-Path $ownershipRoot 'bin\configure-codex.ps1'); kind = 'config-merger' },
     @{ source = 'audit-codex-compatibility.py'; destination = (Join-Path $ownershipRoot 'bin\audit-codex-compatibility.py'); kind = 'compatibility-auditor' },
     @{ source = 'manifest/feishu-tools.json'; destination = (Join-Path $ownershipRoot 'manifest\feishu-tools.json'); kind = 'tool-contract' },
     @{ source = 'manifest/skill-audit.json'; destination = (Join-Path $ownershipRoot 'manifest\skill-audit.json'); kind = 'audit-contract' },
-    @{ source = 'config-fragments/feishu-official-stdio.template.toml'; destination = (Join-Path $ownershipRoot 'config-fragments\feishu-official-stdio.template.toml'); kind = 'config-template' }
+    @{ source = 'config-fragments/feishu-official-stdio.template.toml'; destination = (Join-Path $ownershipRoot 'config-fragments\feishu-official-stdio.template.toml'); kind = 'config-template' },
+    @{ source = 'mcp/dashscope-web-search.template.env'; destination = (Join-Path $ownershipRoot 'connections\dashscope-web-search.template.env'); kind = 'connection-template' },
+    @{ source = 'mcp/image-2.template.env'; destination = (Join-Path $ownershipRoot 'connections\image-2.template.env'); kind = 'connection-template' },
+    @{ source = 'mcp/seedance.template.env'; destination = (Join-Path $ownershipRoot 'connections\seedance.template.env'); kind = 'connection-template' }
 )
 foreach ($supportFile in $supportFiles) {
     $source = Resolve-PackOwnedFile ([string]$supportFile.source)
@@ -279,9 +283,69 @@ function Test-CurrentOwnership([string]$Path, [string]$Kind) {
     return $false
 }
 
-$installedAtUtc = [DateTime]::UtcNow.ToString('o')
+$runtimeScript = Join-Path $PackRoot 'runtime\provision-runtime.ps1'
+if (-not (Test-Path -LiteralPath $runtimeScript -PathType Leaf)) { throw "Runtime provisioner is missing from the pack: $runtimeScript" }
+$powershellCommand = Get-Command powershell.exe -ErrorAction SilentlyContinue
+if (-not $powershellCommand) { throw 'Windows PowerShell is required to provision the bundled Windows runtimes.' }
+$runtimeOutput = & $powershellCommand.Source -NoProfile -ExecutionPolicy Bypass -File $runtimeScript -PackRoot $PackRoot -TargetUserProfile $userProfile | Out-String
+if ($LASTEXITCODE -ne 0) { throw "Bundled runtime provisioning failed: $runtimeOutput" }
+try { $runtimeState = $runtimeOutput | ConvertFrom-Json } catch { throw "Runtime provisioner returned invalid JSON: $runtimeOutput" }
+if ([string]$runtimeState.status -ne 'ready' -or [string]$runtimeState.python.health -ne 'passed' -or [string]$runtimeState.node.health -ne 'passed' -or [string]$runtimeState.feishu.health -ne 'passed') {
+    throw 'Bundled runtime provisioning did not return a healthy runtime state.'
+}
+
+$runtimeStatePath = Join-Path $ownershipRoot 'runtime-state.json'
+$runtimeBinFiles = @(
+    (Join-Path $ownershipRoot 'bin\python.cmd'),
+    (Join-Path $ownershipRoot 'bin\pip.cmd'),
+    (Join-Path $ownershipRoot 'bin\node.cmd'),
+    (Join-Path $ownershipRoot 'bin\npm.cmd')
+)
+foreach ($runtimeOwnedPath in @($runtimeStatePath) + $runtimeBinFiles) {
+    if (Test-Path -LiteralPath $runtimeOwnedPath -PathType Leaf) {
+        $runtimeHash = (Get-FileHash -LiteralPath $runtimeOwnedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if (-not (Test-CurrentOwnership $runtimeOwnedPath 'runtime')) { $installed.Add([pscustomobject]@{ kind = 'runtime'; path = $runtimeOwnedPath; sha256 = $runtimeHash }) }
+    }
+}
+
 $wrapperTarget = Join-Path $ownershipRoot 'bin\start-feishu-mcp.ps1'
 $rendererTarget = Join-Path $ownershipRoot 'bin\render-codex-config.ps1'
+$generatedConfig = Join-Path $ownershipRoot 'config\codex-starter.generated.toml'
+$feishuAppId = [Environment]::GetEnvironmentVariable('FEISHU_APP_ID', 'Process')
+$feishuAppSecret = [Environment]::GetEnvironmentVariable('FEISHU_APP_SECRET', 'Process')
+$feishuEnabled = (-not [string]::IsNullOrWhiteSpace($feishuAppId) -and $feishuAppId -match '^cli_[A-Za-z0-9_-]+$' -and -not [string]::IsNullOrWhiteSpace($feishuAppSecret) -and $feishuAppSecret.Length -ge 8)
+$renderArguments = @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PackRoot 'render-codex-config.ps1'),
+    '-OutputPath', $generatedConfig,
+    '-SkillRoot', $skillTarget,
+    '-FeishuWrapperPath', $wrapperTarget,
+    '-FeishuPackageCache', ([string]$runtimeState.feishu.packageRoot),
+    '-Overwrite'
+)
+if ($feishuEnabled) { $renderArguments += '-EnableFeishu' }
+$renderOutput = & $powershellCommand.Source @renderArguments | Out-String
+if ($LASTEXITCODE -ne 0) { throw "Codex configuration rendering failed: $renderOutput" }
+$configMerger = Join-Path $PackRoot 'configure-codex.ps1'
+$configOutput = & $powershellCommand.Source -NoProfile -ExecutionPolicy Bypass -File $configMerger -GeneratedFragment $generatedConfig -TargetUserProfile $userProfile -KitHome $ownershipRoot -PythonExe ([string]$runtimeState.python.executable) | Out-String
+if ($LASTEXITCODE -ne 0) { throw "Codex configuration merge failed: $configOutput" }
+try { $configStatus = $configOutput | ConvertFrom-Json } catch { throw "Codex configuration merger returned invalid JSON: $configOutput" }
+if (Test-Path -LiteralPath $generatedConfig -PathType Leaf) {
+    $generatedHash = (Get-FileHash -LiteralPath $generatedConfig -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (-not (Test-CurrentOwnership $generatedConfig 'config')) { $installed.Add([pscustomobject]@{ kind = 'config'; path = $generatedConfig; sha256 = $generatedHash }) }
+}
+$connectionStatusPath = Join-Path $ownershipRoot 'connection-status.json'
+$connectionStatus = [ordered]@{
+    schemaVersion = 1
+    feishu = if ($feishuEnabled) { 'enabled-awaiting-tenant-health' } else { 'disabled-awaiting-credentials' }
+    codexConfig = [string]$configStatus.status
+    apiServices = [ordered]@{ templatesInstalled = $true; credentialsStored = $false; note = 'DashScope, Image-2 and Seedance values remain user-provided environment variables.' }
+    secretsStored = $false
+}
+$connectionStatus | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $connectionStatusPath -Encoding UTF8
+$connectionHash = (Get-FileHash -LiteralPath $connectionStatusPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if (-not (Test-CurrentOwnership $connectionStatusPath 'connection-status')) { $installed.Add([pscustomobject]@{ kind = 'connection-status'; path = $connectionStatusPath; sha256 = $connectionHash }) }
+
+$installedAtUtc = [DateTime]::UtcNow.ToString('o')
 $readinessFile = Join-Path $ownershipRoot 'readiness.json'
 $readiness = [ordered]@{
     schemaVersion = 1
@@ -301,8 +365,8 @@ $readiness = [ordered]@{
         feishuWrapper = Test-CurrentOwnership $wrapperTarget 'mcp-wrapper'
         configRenderer = Test-CurrentOwnership $rendererTarget 'config-renderer'
     }
-    runtime = [ordered]@{ status = 'not-managed'; note = 'Third-party runtimes and npm packages are not installed by this script.' }
-    connections = [ordered]@{ feishu = 'disabled-not-configured'; note = 'Render and merge config only after credentials, offline package cache, and health checks pass.' }
+    runtime = $runtimeState
+    connections = $connectionStatus
     secretsStored = $false
 }
 $readinessTemp = Join-Path ([IO.Path]::GetTempPath()) ('codex-starter-readiness-' + [guid]::NewGuid().ToString('N') + '.json')

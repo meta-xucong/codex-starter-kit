@@ -17,7 +17,7 @@
     "defaultInstall": "installByDefault=true only",
     "implicitInvocation": "non-core-ready skills are disabled until enableWhen passes",
     "dependencyModel": "Each dependency is an object; status never hides runtime, connection, credential, or capability closure.",
-    "pythonRuntime": {"platform": "win_amd64", "implementation": "cpython", "abi": "cp312", "version": "3.12.x", "materializationStatus": "pending", "installReady": false}
+    "pythonRuntime": {"platform": "win_amd64", "implementation": "cpython", "abi": "cp312", "version": "3.12.10", "materializationStatus": "ready", "installReady": true, "mediaManifest": "runtime/bundled/media-manifest.json", "wheelhouseManifest": "runtime/wheelhouse-manifest.json"}
   },
   "skills": [
     {
@@ -72,8 +72,8 @@
       "notes": "保持禁用：当前能力包没有可验证的远程 Canvas 节点/画布运行时；仅提供替代建议。",
       "installByDefault": false,
       "afterRemediationStatus": "unsupported",
-      "enableWhen": [
-        "disabled"
+    "enableWhen": [
+      "disabled"
       ],
       "verification": {
         "skillFile": "skills/canvas/SKILL.md",
@@ -1205,6 +1205,13 @@
       ],
       "installByDefault": false,
       "afterRemediationStatus": "unsupported",
+      "redistribution": {
+        "status": "quarantined-stub-only",
+        "sourceBodyIncluded": false,
+        "evidenceRequired": true,
+        "publicStubMarker": "CODEX_PUBLIC_QUARANTINE_STUB_V1",
+        "maxPublicStubBytes": 4096
+      },
       "enableWhen": [
         "license-evidence-approved",
         "skill-installed",
@@ -1894,6 +1901,17 @@
           "platform": "win_amd64",
           "healthCheck": "python-env-setup/scripts/check_python_env.ps1 -Json; require cpython-312/win_amd64",
           "failureMessage": "需要安装 U 盘提供的 Python 3.12 per-user 运行时。"
+        },
+        {
+          "id": "python.package.Pillow",
+          "kind": "python-package",
+          "required": true,
+          "autoInstallable": true,
+          "packageName": "Pillow",
+          "importName": "PIL",
+          "lockedVersion": "12.3.0",
+          "healthCheck": "python -c \"import PIL\"",
+          "failureMessage": "公众号封面脚本需要 Pillow；离线 wheelhouse 未健康时不得声称封面生成可用。"
         },
         {
           "id": "api.image-2",

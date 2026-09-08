@@ -51,6 +51,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True, help="Release output root")
     parser.add_argument("--python", dest="python_executable", default=sys.executable, help="cp312 interpreter used for pip download")
     parser.add_argument("--index-url", default=None, help="Optional approved package index")
+    parser.add_argument(
+        "--find-links",
+        action="append",
+        default=[],
+        help="Additional local wheel directory used to satisfy packages without an approved platform wheel",
+    )
     return parser.parse_args()
 
 
@@ -78,6 +84,8 @@ def main() -> int:
     ]
     if args.index_url:
         command.extend(["--index-url", args.index_url])
+    for find_links in args.find_links:
+        command.extend(["--find-links", str(Path(find_links).resolve())])
     subprocess.run(command, check=True)
 
     records: list[dict] = []

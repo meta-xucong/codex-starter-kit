@@ -6,13 +6,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoRoot
+$python = Get-Command python -ErrorAction SilentlyContinue
+if (-not $python) { throw 'Verification requires Python 3. The installer itself does not.' }
 
 if (-not $SkipRebuild) {
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $python) { throw 'Verification requires Python 3. The installer itself does not.' }
     & $python.Source (Join-Path $repoRoot 'scripts\build-pack.py') --check
     if ($LASTEXITCODE -ne 0) { throw 'Pack build failed.' }
 }
+
+# --SkipRebuild must still reject a generated pack made from an older source
+# tree.  The builder's --verify path is read-only and compares sourceTreeSha256.
+& $python.Source (Join-Path $repoRoot 'scripts\build-pack.py') --verify
+if ($LASTEXITCODE -ne 0) { throw 'Generated pack provenance verification failed.' }
 
 function Read-JsonFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Missing JSON file: $Path" }
@@ -35,6 +40,7 @@ $pack = Read-JsonFile (Join-Path $repoRoot 'installer-pack\pack.json')
 $dependencies = Read-JsonFile (Join-Path $repoRoot 'installer-pack\dependencies.json')
 $fileManifest = Read-JsonFile (Join-Path $repoRoot 'installer-pack\file-manifest.json')
 $runtimeArtifacts = Read-JsonFile (Join-Path $repoRoot 'manifest\runtime-artifacts.json')
+$mediaManifest = Read-JsonFile (Join-Path $repoRoot 'runtime\bundled\media-manifest.json')
 $mcpServers = Read-JsonFile (Join-Path $repoRoot 'manifest\mcp-servers.json')
 $feishuTools = Read-JsonFile (Join-Path $repoRoot 'manifest\feishu-tools.json')
 $apiServices = Read-JsonFile (Join-Path $repoRoot 'manifest\api-services.json')
@@ -43,7 +49,7 @@ $connectionFields = Read-JsonFile (Join-Path $repoRoot 'manifest\connection-fiel
 if ([int]$pack.schemaVersion -ne 2) { throw 'Pack schema must be 2.' }
 if ([string]$pack.version -ne '1.2.0') { throw "Unexpected pack version: $($pack.version)" }
 if ([string]$pack.sourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Pack source commit must be a 40-character Git commit.' }
-if ([string]$pack.sourceCommitRole -notin @('git-head','upstream-base')) { throw 'Pack source commit role is invalid.' }
+if ([string]$pack.sourceCommitRole -notin @('build-input','upstream-base')) { throw 'Pack source commit role is invalid.' }
 if ([string]$pack.sourceTreeSha256 -notmatch '^[0-9a-f]{64}$') { throw 'Pack source tree SHA-256 is missing or invalid.' }
 if ([string]$pack.compatibleCodex.minCodexVersion -ne '0.144.0') { throw 'Minimum Codex version contract changed unexpectedly.' }
 if ([string]$pack.compatibleCodex.testedCodexVersion -ne '0.147.0') { throw 'Tested Codex version contract changed unexpectedly.' }
@@ -133,6 +139,8 @@ Scan-TextRoots @((Join-Path $repoRoot 'installer-pack'))
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'installer-pack\runtime\requirements-python-win-x64-py312.in') -PathType Leaf)) { throw 'Pack Python direct requirements input missing.' }
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'installer-pack\runtime\wheelhouse-manifest.json') -PathType Leaf)) { throw 'Pack wheelhouse manifest missing.' }
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'installer-pack\manifest\runtime-artifacts.json') -PathType Leaf)) { throw 'Pack runtime artifact manifest missing.' }
+if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'runtime\bundled\media-manifest.json') -PathType Leaf)) { throw 'Source bundled media manifest missing.' }
+if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'installer-pack\runtime\bundled\media-manifest.json') -PathType Leaf)) { throw 'Pack bundled media manifest missing.' }
 foreach ($runtimeScript in @('materialize-python-wheelhouse.py','materialize-python-wheelhouse.ps1')) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot ('installer-pack\runtime\' + $runtimeScript)) -PathType Leaf)) { throw "Pack runtime materializer missing: $runtimeScript" }
 }
@@ -147,8 +155,13 @@ foreach ($requiredPackFile in @(
     'config-fragments\feishu-official-stdio.template.toml',
     'docs\CODEX-ADAPTATION-DEVELOPMENT.md',
     'docs\KNOWN-LIMITATIONS.md',
+    'docs\POST-MERGE-CORRECTIVE-DEVELOPMENT.md',
+    'docs\FULL-BUNDLE-ONE-CLICK-DEVELOPMENT.md',
     'install-to-codex.ps1',
     'render-codex-config.ps1',
+    'configure-codex.ps1',
+    'install-all.ps1',
+    'Install-Codex-Starter.cmd',
     'audit-codex-compatibility.py'
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot ('installer-pack\' + $requiredPackFile)) -PathType Leaf)) { throw "Pack extension file missing: $requiredPackFile" }
@@ -162,11 +175,33 @@ foreach ($readmePath in @(
 }
 if (@($runtimeArtifacts.artifacts).Count -ne 4) { throw 'Expected Python, wheelhouse, optional Node and locked MCP package artifact records.' }
 foreach ($artifact in $runtimeArtifacts.artifacts) {
-    if ([string]$artifact.materializationStatus -ne 'pending' -or [bool]$artifact.installReady) { throw "Unmaterialized runtime artifact cannot be install-ready: $($artifact.artifactId)" }
+    if ([string]$artifact.materializationStatus -ne 'ready' -or -not [bool]$artifact.installReady) { throw "Bundled runtime artifact is not install-ready: $($artifact.artifactId)" }
 }
 $wheelManifest = Read-JsonFile (Join-Path $repoRoot 'runtime\wheelhouse-manifest.json')
-if ([string]$wheelManifest.materializationStatus -ne 'pending' -or [bool]$wheelManifest.installReady -or [bool]$wheelManifest.transitiveClosure.complete) { throw 'Public wheelhouse manifest must remain pending until private materialization.' }
+if ([string]$wheelManifest.materializationStatus -ne 'ready' -or -not [bool]$wheelManifest.installReady -or -not [bool]$wheelManifest.transitiveClosure.complete) { throw 'Bundled wheelhouse manifest is not install-ready.' }
 if ([string]$wheelManifest.abi -ne 'cp312' -or [string]$wheelManifest.platform -ne 'win_amd64') { throw 'Wheelhouse ABI/platform contract is not cp312/win_amd64.' }
+if (@($wheelManifest.wheels).Count -ne 52 -or [int]$wheelManifest.transitiveClosure.wheelCount -ne 52) { throw 'Expected 52 bundled Python wheels.' }
+if (@($mediaManifest.media).Count -ne 3) { throw 'Expected Python, Node and Feishu bundled media records.' }
+foreach ($media in $mediaManifest.media) {
+    foreach ($mediaRoot in @($repoRoot, (Join-Path $repoRoot 'installer-pack'))) {
+        $mediaPath = if ($mediaRoot -eq $repoRoot) { Join-Path $repoRoot ([string]$media.path) } else { Resolve-PackFile ([string]$media.path) }
+        if (-not (Test-Path -LiteralPath $mediaPath -PathType Leaf)) { throw "Bundled media missing: $mediaPath" }
+        $mediaItem = Get-Item -LiteralPath $mediaPath
+        if ([int64]$mediaItem.Length -ne [int64]$media.bytes) { throw "Bundled media byte count mismatch: $mediaPath" }
+        $mediaHash = (Get-FileHash -LiteralPath $mediaPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($mediaHash -ne ([string]$media.sha256).ToLowerInvariant()) { throw "Bundled media hash mismatch: $mediaPath" }
+    }
+}
+foreach ($wheel in $wheelManifest.wheels) {
+    foreach ($wheelRoot in @($repoRoot, (Join-Path $repoRoot 'installer-pack'))) {
+        $wheelPath = if ($wheelRoot -eq $repoRoot) { Join-Path $repoRoot ([string]$wheel.relativePath) } else { Resolve-PackFile ([string]$wheel.relativePath) }
+        if (-not (Test-Path -LiteralPath $wheelPath -PathType Leaf)) { throw "Bundled wheel missing: $wheelPath" }
+        $wheelItem = Get-Item -LiteralPath $wheelPath
+        if ([int64]$wheelItem.Length -ne [int64]$wheel.bytes) { throw "Bundled wheel byte count mismatch: $wheelPath" }
+        $wheelHash = (Get-FileHash -LiteralPath $wheelPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($wheelHash -ne ([string]$wheel.sha256).ToLowerInvariant()) { throw "Bundled wheel hash mismatch: $wheelPath" }
+    }
+}
 if (@($mcpServers.servers).Count -ne 1 -or [string]$mcpServers.servers[0].id -ne 'feishu') { throw 'MCP inventory must contain the guided Feishu server record.' }
 if ([string]$feishuTools.toolNameCase -ne 'dot' -or (@($feishuTools.readTools).Count + @($feishuTools.writeTools).Count) -ne 25) { throw 'Feishu tool contract must contain 25 dot-case tools.' }
 if (@($apiServices.services).Count -ne 3) { throw 'Expected three direct API service records.' }
@@ -241,7 +276,7 @@ foreach ($pyFile in $pyFiles) {
 if ($LASTEXITCODE -ne 0) { throw 'Agent TOML parse failed.' }
 
 $psParser = [System.Management.Automation.Language.Parser]
-$psFiles = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'skills') -Recurse -Filter '*.ps1' -File) + @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'scripts') -Filter '*.ps1' -File)
+$psFiles = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'skills') -Recurse -Filter '*.ps1' -File) + @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'scripts') -Filter '*.ps1' -File) + @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'runtime') -Filter '*.ps1' -File)
 foreach ($psFile in $psFiles) {
     $tokens = $null
     $errors = $null
@@ -275,12 +310,18 @@ try {
     $summary = & $ps.Source -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'skills\daily-reflection\scripts\reflection.ps1') -Command summary | ConvertFrom-Json
     if (@($summary).Count -lt 1) { throw 'Reflection storage smoke test failed.' }
 
+    $sourceArticleDraftRoot = Join-Path $repoRoot 'skills\wechat-article-creator\drafts'
+    $sourceArticleDraftBefore = if (Test-Path -LiteralPath $sourceArticleDraftRoot -PathType Container) { @(Get-ChildItem -LiteralPath $sourceArticleDraftRoot -Recurse -File | ForEach-Object { $_.FullName }) } else { @() }
     & $python.Source (Join-Path $repoRoot 'skills\wechat-article-creator\scripts\start_article.py') '..\..\unsafe title' --topic 'verification' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'WeChat article storage smoke test failed.' }
     $articleDraftRoot = Join-Path $smokeRoot 'wechat-article-creator\drafts'
     $articleDrafts = @(Get-ChildItem -LiteralPath $articleDraftRoot -Filter '*.md' -File -ErrorAction SilentlyContinue)
     if ($articleDrafts.Count -ne 1 -or $articleDrafts[0].Name -notmatch '_unsafe_title\.md$') { throw 'WeChat article filename/path normalization contract failed.' }
-    if (Test-Path -LiteralPath (Join-Path $repoRoot 'skills\wechat-article-creator\drafts')) { throw 'WeChat article smoke test wrote into the installed Skill tree.' }
+    if (Test-Path -LiteralPath $sourceArticleDraftRoot -PathType Container) {
+        $sourceArticleDraftAfter = @(Get-ChildItem -LiteralPath $sourceArticleDraftRoot -Recurse -File | ForEach-Object { $_.FullName })
+        $newSourceDrafts = @(Compare-Object $sourceArticleDraftBefore $sourceArticleDraftAfter -PassThru | Where-Object { $_ -in $sourceArticleDraftAfter })
+        if ($newSourceDrafts.Count -gt 0) { throw 'WeChat article smoke test wrote into the installed Skill tree.' }
+    }
 
     & $python.Source (Join-Path $repoRoot 'skills\web-content-fetcher\scripts\fetch.py') --help | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Web content fetcher --help smoke test failed without optional imports.' }
@@ -359,14 +400,18 @@ try {
     foreach ($installedSupportFile in @(
         '.codex\codex-agent-kit\bin\start-feishu-mcp.ps1',
         '.codex\codex-agent-kit\bin\render-codex-config.ps1',
+        '.codex\codex-agent-kit\bin\configure-codex.ps1',
         '.codex\codex-agent-kit\bin\audit-codex-compatibility.py',
+        '.codex\codex-agent-kit\runtime-state.json',
+        '.codex\codex-agent-kit\connection-status.json',
+        '.codex\codex-agent-kit\config\codex-starter.generated.toml',
         '.codex\codex-agent-kit\readiness.json',
         '.codex\codex-agent-kit\install-manifest.json'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $isolatedProfile $installedSupportFile) -PathType Leaf)) { throw "Isolated install support file missing: $installedSupportFile" }
     }
     $readiness = Read-JsonFile (Join-Path $isolatedProfile '.codex\codex-agent-kit\readiness.json')
-    if ([int]$readiness.installed.skills -ne 25 -or [int]$readiness.installed.agents -ne 7 -or [bool]$readiness.secretsStored) { throw 'Isolated readiness report is inconsistent.' }
+    if ([int]$readiness.installed.skills -ne 25 -or [int]$readiness.installed.agents -ne 7 -or [string]$readiness.runtime.status -ne 'ready' -or [string]$readiness.connections.codexConfig -ne 'merged' -or [bool]$readiness.secretsStored) { throw 'Isolated readiness report is inconsistent.' }
 
     $locallyModifiedAgent = @(Get-ChildItem -LiteralPath (Join-Path $isolatedProfile '.codex\agents') -Filter '*.toml' -File | Sort-Object Name)[0].FullName
     Add-Content -LiteralPath $locallyModifiedAgent -Value "`n# local-verification-change"
@@ -384,12 +429,12 @@ try {
     if ((Get-Content -LiteralPath $locallyModifiedAgent -Raw) -notmatch 'local-verification-change') { throw 'Installer overwrote a locally modified Agent.' }
     if (-not (Test-Path -LiteralPath $userAddedSkillFile -PathType Leaf)) { throw 'Installer removed a user-added Skill file.' }
 
-    & $ps.Source -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'installer-pack\install-to-codex.ps1') -PackRoot (Join-Path $repoRoot 'installer-pack') -TargetUserProfile $isolatedProfile -IncludeNonDefault -IncludeUnsupported -Overwrite | Out-Null
+    & $ps.Source -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'installer-pack\install-all.ps1') -TargetUserProfile $isolatedProfile | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Explicit unsupported-content isolated installer smoke test failed.' }
     $installedSkillCount = @(Get-ChildItem -LiteralPath (Join-Path $isolatedProfile '.agents\skills') -Directory).Count
     if ($installedSkillCount -ne 50) { throw "Explicit unsupported install count mismatch: $installedSkillCount" }
     $readiness = Read-JsonFile (Join-Path $isolatedProfile '.codex\codex-agent-kit\readiness.json')
-    if ([int]$readiness.installed.skills -ne 50 -or -not [bool]$readiness.requested.includeUnsupported) { throw 'Unsupported-content readiness report is inconsistent.' }
+    if ([int]$readiness.installed.skills -ne 50 -or -not [bool]$readiness.requested.includeUnsupported -or [string]$readiness.runtime.status -ne 'ready' -or [string]$readiness.connections.codexConfig -ne 'merged') { throw 'Unsupported-content readiness report is inconsistent.' }
 
     $tamperedPack = Join-Path $smokeRoot 'tampered-pack'
     Copy-Item -LiteralPath (Join-Path $repoRoot 'installer-pack') -Destination $tamperedPack -Recurse
